@@ -1,4 +1,4 @@
 yzx_test/*.json
-yzx_test/__pycache__/
-yzx_test/*.pyc
-yzx_test/*.sqlite3
+yzx_test/huskyqa_test/__pycache__/
+yzx_test/iirc_test/__pycache__/
+yzx_test/benchmarks/iirc/*.sqlite3
