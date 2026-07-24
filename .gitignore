@@ -1,2 +1,4 @@
 yzx_test/*.json
 yzx_test/__pycache__/
+yzx_test/*.pyc
+yzx_test/*.sqlite3
