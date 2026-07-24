@@ -10,11 +10,11 @@ from prompt import evaluate_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "input": "summary_result_l_l_l_l.json",
+    "input": "summary_result_g_q_g_l.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "summary_score_l_l_l_l.json",
+    "output": "summary_score_g_q_g_l.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",
