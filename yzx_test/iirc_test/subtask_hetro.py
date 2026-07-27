@@ -12,9 +12,15 @@ from evaluate_agent_fit import (
 from openai_compat import run_chat_completion
 from prompt import scorer_prompt
 
-#/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct
-#/data/labshare/Param/gemma-3-4b-it
-#/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507
+# "model": "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
+# "api_url": "http://10.137.144.97:7001/v1",
+
+# "model": "/data/labshare/Param/gemma-3-4b-it",
+# "api_url": "http://10.137.144.97:7002/v1",
+
+# "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+# "api_url": "http://10.137.144.97:7003/v1",
+
 AGENT_CONFIG = {
     "code_agent": {
         "model": "/data/labshare/Param/gemma-3-4b-it",
@@ -31,15 +37,15 @@ AGENT_CONFIG = {
         "timeout": 120,
     },
     "search_agent": {
-        "model": "/data/labshare/Param/gemma-3-4b-it",
-        "api_url": "http://10.137.144.97:7002/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+        "api_url": "http://10.137.144.97:7003/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "commonsense_agent": {
-        "model": "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
-        "api_url": "http://10.137.144.97:7001/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+        "api_url": "http://10.137.144.97:7003/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
@@ -51,8 +57,8 @@ AGENT_CONFIG = {
 CONFIG = {
     "mode": "respond",
     "plans": "benchmarks/iirc/iirc_plans_llama3.json",
-    "responses": "iirc_test/results/subtask_hetro_responses_g_q_g_l.json",
-    "output": "iirc_test/results/subtask_hetro_scores_g_q_g_l.json",
+    "responses": "iirc_test/results/subtask_hetro_responses_g_q_q_q.json",
+    "output": "iirc_test/results/subtask_hetro_scores_g_q_q_q.json",
     "limit": None,
     "force": False,
     "retry_errors": True,

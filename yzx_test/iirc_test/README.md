@@ -109,3 +109,17 @@ python3 iirc_test/summary_score.py
 The final score summary contains the original judge accuracy plus deterministic
 IIRC normalized exact match and token F1. `plan_evaluate.py` remains as a
 compatibility alias for `evaluate.py`.
+
+## Device Collision Analysis
+
+Count each query's planner-selected agent calls and simulate dependency-aware
+LRU model replacement:
+
+```bash
+python3 iirc_test/analyze_device_collisions.py
+```
+
+The default configurations compare two and three devices under both the shared
+three-model mapping and four independent agent models. Detailed per-query call
+counts are saved in
+`iirc_test/results/device_collision_summary_lru.json`.

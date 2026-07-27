@@ -6,56 +6,87 @@ from pathlib import Path
 
 # Edit these defaults directly before running the script.
 CONFIG = {
-    "plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+    "huskyqa_plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+    "iirc_plans": "benchmarks/iirc/iirc_plans_llama3.json",
+    "iirc_queries_per_huskyqa": 4,
     "device_counts": [2, 3],
-    "summary_output": "huskyqa_test/results/device_collision_summary_lru.json",
+    "summary_output": "multi_collision_summary_lru.json",
 }
 
-MODEL_CONFIGS = {
-    "4 agents / 3 models": {
-        "code_agent": "gemma3-4B",
-        "math_agent": "qwen3-4B",
-        "search_agent": "gemma3-4B",
-        "commonsense_agent": "llama3-3B",
+DATASET_MODEL_CONFIGS = {
+    "huskyqa": {
+        "label": "g_q_g_l",
+        "agents": {
+            "code_agent": "gemma3-4B",
+            "math_agent": "qwen3-4B",
+            "search_agent": "gemma3-4B",
+            "commonsense_agent": "llama3-3B",
+        },
     },
-    "4 agents / 4 independent models": {
-        "code_agent": "code-model",
-        "math_agent": "math-model",
-        "search_agent": "search-model",
-        "commonsense_agent": "commonsense-model",
+    "iirc": {
+        "label": "l_g_q_q",
+        "agents": {
+            "code_agent": "llama3-3B",
+            "math_agent": "gemma3-4B",
+            "search_agent": "qwen3-4B",
+            "commonsense_agent": "qwen3-4B",
+        },
     },
 }
+
+
+def load_json(path):
+    with Path(path).open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_json(path, data):
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+    temporary.replace(output)
+    return output.resolve()
 
 
 def normalize_id(value):
     return str(value)
 
 
-def configured_agents():
-    agent_sets = [set(config) for config in MODEL_CONFIGS.values()]
-    if not agent_sets or any(agents != agent_sets[0] for agents in agent_sets[1:]):
-        raise ValueError("Every MODEL_CONFIGS entry must contain the same agents")
-    return agent_sets[0]
+def interleave_plans(huskyqa_plans, iirc_plans, iirc_per_huskyqa):
+    if iirc_per_huskyqa < 1:
+        raise ValueError("iirc_queries_per_huskyqa must be at least 1")
+
+    arrivals = []
+    huskyqa_index = 0
+    iirc_index = 0
+    while huskyqa_index < len(huskyqa_plans) or iirc_index < len(iirc_plans):
+        if huskyqa_index < len(huskyqa_plans):
+            arrivals.append(
+                {
+                    "dataset": "huskyqa",
+                    "record": huskyqa_plans[huskyqa_index],
+                }
+            )
+            huskyqa_index += 1
+
+        for _ in range(iirc_per_huskyqa):
+            if iirc_index >= len(iirc_plans):
+                break
+            arrivals.append(
+                {
+                    "dataset": "iirc",
+                    "record": iirc_plans[iirc_index],
+                }
+            )
+            iirc_index += 1
+
+    return arrivals
 
 
-def load_plans(path):
-    with Path(path).open("r", encoding="utf-8") as file:
-        plans = json.load(file)
-
-    valid_agents = configured_agents()
-    agent_counts = Counter()
-    for plan in plans:
-        for step in plan.get("plan") or []:
-            agent = step.get("agent") or step.get("name") or step.get("name_1")
-            if agent not in valid_agents:
-                raise ValueError(
-                    f"Unknown agent {agent!r} in source_index={plan.get('source_index')}"
-                )
-            agent_counts[agent] += 1
-    return plans, agent_counts
-
-
-def prepare_tasks(plan, agent_models):
+def prepare_tasks(dataset, plan):
+    agent_models = DATASET_MODEL_CONFIGS[dataset]["agents"]
     raw_tasks = plan.get("plan") or []
     indices_by_id = {
         normalize_id(task.get("id")): index
@@ -66,6 +97,12 @@ def prepare_tasks(plan, agent_models):
 
     for task in raw_tasks:
         agent = task.get("agent") or task.get("name") or task.get("name_1")
+        if agent not in agent_models:
+            raise ValueError(
+                f"Unknown agent {agent!r} in {dataset} "
+                f"source_index={plan.get('source_index')}"
+            )
+
         dependencies = []
         for dependency in task.get("dep") or []:
             dependency_value = (
@@ -77,8 +114,8 @@ def prepare_tasks(plan, agent_models):
             if dependency_id not in indices_by_id:
                 dependency_issues.append(
                     {
+                        "dataset": dataset,
                         "source_index": plan.get("source_index"),
-                        "query": plan.get("query"),
                         "step_id": task.get("id"),
                         "dependency": dependency,
                         "reason": "dependency does not reference a top-level plan step",
@@ -86,6 +123,7 @@ def prepare_tasks(plan, agent_models):
                 )
                 continue
             dependencies.append(indices_by_id[dependency_id])
+
         tasks.append(
             {
                 "agent": agent,
@@ -96,61 +134,9 @@ def prepare_tasks(plan, agent_models):
     return tasks, dependency_issues
 
 
-def build_query_statistics(plans):
-    per_query = []
-    call_distribution = Counter()
-    dependency_issues = []
-    validation_models = next(iter(MODEL_CONFIGS.values()))
-
-    for plan in plans:
-        raw_tasks = plan.get("plan") or []
-        agent_calls = Counter(
-            task.get("agent") or task.get("name") or task.get("name_1")
-            for task in raw_tasks
-        )
-        total_calls = len(raw_tasks)
-        call_distribution[total_calls] += 1
-        _, issues = prepare_tasks(plan, validation_models)
-        dependency_issues.extend(issues)
-        per_query.append(
-            {
-                "source_index": plan.get("source_index"),
-                "query": plan.get("query"),
-                "total_agent_calls": total_calls,
-                "agent_calls": {
-                    agent: agent_calls.get(agent, 0)
-                    for agent in sorted(configured_agents())
-                },
-                "planner_error": plan.get("error"),
-                "invalid_dependency_count": len(issues),
-            }
-        )
-
-    total_calls = sum(row["total_agent_calls"] for row in per_query)
-    query_count = len(per_query)
-    return {
-        "per_query": per_query,
-        "call_count_distribution": {
-            str(call_count): query_count
-            for call_count, query_count in sorted(call_distribution.items())
-        },
-        "average_agent_calls_per_query": (
-            total_calls / query_count if query_count else 0.0
-        ),
-        "queries_with_empty_plan": sum(
-            row["total_agent_calls"] == 0 for row in per_query
-        ),
-        "queries_with_planner_error": sum(
-            bool(row["planner_error"]) for row in per_query
-        ),
-        "dependency_issues": dependency_issues,
-    }
-
-
 def select_ready_tasks(tasks, completed, device_count):
     ready_roots = []
     ready_dependents = []
-
     for index, task in enumerate(tasks):
         if completed & (1 << index):
             continue
@@ -180,7 +166,6 @@ def assign_lru(devices, tasks, selected, clock):
     collision_devices = []
     cold_starts = 0
 
-    # Reuse matching model instances before loading or replacing anything.
     for task_index in selected:
         model = tasks[task_index]["model"]
         matching = [
@@ -198,7 +183,6 @@ def assign_lru(devices, tasks, selected, clock):
         assignments[task_index] = device_index
         available_devices.remove(device_index)
 
-    # An initial load onto an empty device is not a model-switch collision.
     still_unresolved = []
     for task_index in unresolved:
         empty_devices = [
@@ -214,7 +198,6 @@ def assign_lru(devices, tasks, selected, clock):
         available_devices.remove(device_index)
         cold_starts += 1
 
-    # Replace the least recently used instance for every unresolved request.
     for task_index in still_unresolved:
         device_index = min(
             available_devices,
@@ -231,7 +214,46 @@ def assign_lru(devices, tasks, selected, clock):
     return assignments, collision_devices, cold_starts
 
 
-def simulate(plans, device_count, agent_models):
+def collect_statistics(arrivals):
+    dataset_queries = Counter()
+    dataset_agent_calls = {}
+    dataset_model_calls = {}
+    dependency_issues = []
+
+    for dataset in DATASET_MODEL_CONFIGS:
+        dataset_agent_calls[dataset] = Counter()
+        dataset_model_calls[dataset] = Counter()
+
+    for arrival in arrivals:
+        dataset = arrival["dataset"]
+        plan = arrival["record"]
+        dataset_queries[dataset] += 1
+        tasks, issues = prepare_tasks(dataset, plan)
+        dependency_issues.extend(issues)
+        for task in tasks:
+            dataset_agent_calls[dataset][task["agent"]] += 1
+            dataset_model_calls[dataset][task["model"]] += 1
+
+    combined_model_calls = Counter()
+    for calls in dataset_model_calls.values():
+        combined_model_calls.update(calls)
+
+    return {
+        "dataset_queries": dict(dataset_queries),
+        "dataset_agent_calls": {
+            dataset: dict(calls)
+            for dataset, calls in dataset_agent_calls.items()
+        },
+        "dataset_model_calls": {
+            dataset: dict(calls)
+            for dataset, calls in dataset_model_calls.items()
+        },
+        "combined_model_calls": dict(combined_model_calls),
+        "dependency_issues": dependency_issues,
+    }
+
+
+def simulate(arrivals, device_count):
     devices = [
         {
             "model": None,
@@ -241,21 +263,26 @@ def simulate(plans, device_count, agent_models):
         }
         for _ in range(device_count)
     ]
+    collisions_by_dataset = Counter()
+    queries_with_collision_by_dataset = Counter()
     total_collisions = 0
     total_cold_starts = 0
     total_slots = 0
     clock = 0
 
-    for plan in plans:
-        tasks, _ = prepare_tasks(plan, agent_models)
+    for arrival in arrivals:
+        dataset = arrival["dataset"]
+        plan = arrival["record"]
+        tasks, _ = prepare_tasks(dataset, plan)
         completed = 0
         full_mask = (1 << len(tasks)) - 1
+        query_collisions = 0
 
         while completed != full_mask:
             selected = select_ready_tasks(tasks, completed, device_count)
             if not selected:
                 raise ValueError(
-                    f"Plan has a dependency cycle at "
+                    f"Plan has a dependency cycle in {dataset} at "
                     f"source_index={plan.get('source_index')}"
                 )
 
@@ -267,7 +294,10 @@ def simulate(plans, device_count, agent_models):
                 selected,
                 clock,
             )
-            total_collisions += len(collision_devices)
+            collisions = len(collision_devices)
+            total_collisions += collisions
+            query_collisions += collisions
+            collisions_by_dataset[dataset] += collisions
             total_cold_starts += cold_starts
 
             for task_index, device_index in assignments.items():
@@ -276,8 +306,15 @@ def simulate(plans, device_count, agent_models):
             for device_index in collision_devices:
                 devices[device_index]["collisions"] += 1
 
+        if query_collisions:
+            queries_with_collision_by_dataset[dataset] += 1
+
     return {
         "model_switch_events": total_collisions,
+        "collisions_by_dataset": dict(collisions_by_dataset),
+        "queries_with_collision_by_dataset": dict(
+            queries_with_collision_by_dataset
+        ),
         "cold_starts": total_cold_starts,
         "execution_slots": total_slots,
         "final_models": [device["model"] for device in devices],
@@ -293,28 +330,23 @@ def simulate(plans, device_count, agent_models):
     }
 
 
-def model_call_counts(agent_counts, agent_models):
-    counts = Counter()
-    for agent, count in agent_counts.items():
-        counts[agent_models[agent]] += count
-    return dict(counts)
-
-
-def print_markdown_table(rows):
+def print_table(rows):
     headers = [
-        "Model configuration",
         "Devices",
         "Collisions",
         "Collision rate",
         "Avg collisions/query",
+        "HuskyQA collisions",
+        "IIRC collisions",
     ]
     display_rows = [
         [
-            row["model_configuration"],
             str(row["devices"]),
             str(row["model_switch_events"]),
             f"{row['collision_rate']:.2%}",
             f"{row['average_collisions_per_query']:.4f}",
+            str(row["collisions_by_dataset"].get("huskyqa", 0)),
+            str(row["collisions_by_dataset"].get("iirc", 0)),
         ]
         for row in rows
     ]
@@ -330,100 +362,83 @@ def print_markdown_table(rows):
         ) + " |"
 
     print(format_row(headers))
-    print("|-" + "-|-".join("-" * width for width in widths) + "-|")
+    print(
+        "|-"
+        + "-|-".join("-" * width for width in widths)
+        + "-|"
+    )
     for row in display_rows:
         print(format_row(row))
 
 
-def print_query_distribution(distribution):
-    print("| Sub-agent calls/query | Query count |")
-    print("|----------------------:|------------:|")
-    for call_count, query_count in distribution.items():
-        print(f"| {call_count} | {query_count} |")
-
-
-def save_json(path, data):
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
-    with temporary_path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-    temporary_path.replace(output_path)
-    return output_path.resolve()
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Simulate dependency-aware online LRU model replacement."
+        description="Simulate LRU collisions for interleaved HuskyQA and IIRC queries."
     )
-    parser.add_argument("--plans", default=CONFIG["plans"])
+    parser.add_argument("--huskyqa-plans", default=CONFIG["huskyqa_plans"])
+    parser.add_argument("--iirc-plans", default=CONFIG["iirc_plans"])
+    parser.add_argument(
+        "--iirc-per-huskyqa",
+        type=int,
+        default=CONFIG["iirc_queries_per_huskyqa"],
+    )
     parser.add_argument("--output", default=CONFIG["summary_output"])
     args = parser.parse_args()
 
-    plans, agent_counts = load_plans(args.plans)
-    total_queries = len(plans)
-    total_agent_calls = sum(agent_counts.values())
-    query_statistics = build_query_statistics(plans)
+    huskyqa_plans = load_json(args.huskyqa_plans)
+    iirc_plans = load_json(args.iirc_plans)
+    arrivals = interleave_plans(
+        huskyqa_plans,
+        iirc_plans,
+        args.iirc_per_huskyqa,
+    )
+    statistics = collect_statistics(arrivals)
+    total_queries = len(arrivals)
+    total_agent_calls = sum(
+        statistics["combined_model_calls"].values()
+    )
     rows = []
-    configurations = {}
+    device_results = {}
 
-    for configuration_name, agent_models in MODEL_CONFIGS.items():
-        device_results = {}
-        for device_count in CONFIG["device_counts"]:
-            result = simulate(plans, device_count, agent_models)
-            collisions = result["model_switch_events"]
-            collision_rate = (
-                collisions / total_agent_calls if total_agent_calls else 0.0
-            )
-            average_collisions = (
-                collisions / total_queries if total_queries else 0.0
-            )
-            result.update(
-                {
-                    "collision_rate": collision_rate,
-                    "average_collisions_per_query": average_collisions,
-                }
-            )
-            device_results[str(device_count)] = result
-            rows.append(
-                {
-                    "model_configuration": configuration_name,
-                    "devices": device_count,
-                    **result,
-                }
-            )
-
-        configurations[configuration_name] = {
-            "agent_models": agent_models,
-            "model_calls": model_call_counts(agent_counts, agent_models),
-            "device_results": device_results,
-        }
+    for device_count in CONFIG["device_counts"]:
+        result = simulate(arrivals, device_count)
+        collisions = result["model_switch_events"]
+        result["collision_rate"] = (
+            collisions / total_agent_calls if total_agent_calls else 0.0
+        )
+        result["average_collisions_per_query"] = (
+            collisions / total_queries if total_queries else 0.0
+        )
+        device_results[str(device_count)] = result
+        rows.append({"devices": device_count, **result})
 
     summary = {
         "replacement_policy": "LRU",
-        "plans": args.plans,
+        "arrival_pattern": {
+            "huskyqa_queries": 1,
+            "iirc_queries": args.iirc_per_huskyqa,
+            "tail_policy": "continue the remaining dataset in source order",
+        },
+        "dataset_model_configurations": DATASET_MODEL_CONFIGS,
         "total_queries": total_queries,
         "total_agent_calls": total_agent_calls,
-        "agent_calls": dict(agent_counts),
-        "query_call_statistics": query_statistics,
-        "model_configurations": configurations,
+        **statistics,
+        "device_results": device_results,
     }
-    output_path = save_json(args.output, summary)
+    output = save_json(args.output, summary)
 
+    print(
+        f"Arrival pattern: 1 HuskyQA -> {args.iirc_per_huskyqa} IIRC"
+    )
     print(f"Total queries: {total_queries}")
     print(f"Total agent calls: {total_agent_calls}")
-    print(
-        "Average agent calls/query: "
-        f"{query_statistics['average_agent_calls_per_query']:.4f}"
-    )
+    print(f"Combined model calls: {statistics['combined_model_calls']}")
     print(
         "Invalid dependency references: "
-        f"{len(query_statistics['dependency_issues'])}\n"
+        f"{len(statistics['dependency_issues'])}\n"
     )
-    print_query_distribution(query_statistics["call_count_distribution"])
-    print()
-    print_markdown_table(rows)
-    print(f"\nSummary JSON: {output_path}")
+    print_table(rows)
+    print(f"\nSummary JSON: {output}")
 
 
 if __name__ == "__main__":
