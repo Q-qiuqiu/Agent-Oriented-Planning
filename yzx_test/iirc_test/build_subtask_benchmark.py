@@ -8,7 +8,13 @@ from openai_compat import run_chat_completion
 from prompt import planner_prompt
 
 
-AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
+AGENTS = [
+    "context_agent",
+    "retrieval_agent",
+    "reasoning_agent",
+    "calculation_agent",
+    "answerability_agent",
+]
 
 # Edit these defaults directly when running from this file.
 CONFIG = {
@@ -76,6 +82,11 @@ def normalize_plan(plan):
         item.setdefault("id", i)
         if "agent" not in item:
             item["agent"] = item.get("name") or item.get("name_1")
+        if item.get("agent") not in AGENTS:
+            raise ValueError(
+                f"Plan step {item['id']} has unsupported agent "
+                f"{item.get('agent')!r}; expected one of {AGENTS}"
+            )
         item.setdefault("dep", [])
         normalized.append(item)
     return normalized

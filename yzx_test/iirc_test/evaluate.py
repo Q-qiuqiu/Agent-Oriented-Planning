@@ -9,7 +9,7 @@ from prompt import plan_detector_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "plans": "benchmarks/iirc/iirc_plans_llama3.json",
+    "plans": "benchmarks/iirc/iirc_plans_parallel_llama3.json",
     "query": None,
     "source_index": None,
     "limit": None,

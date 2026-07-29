@@ -1,104 +1,127 @@
 planner_prompt = """
-You are a planning agent. Decompose the user query into executable subtasks and
-choose one suitable agent for each subtask.
+You are an IIRC planning agent. Decompose the question and its incomplete
+Wikipedia context into executable evidence-gathering and reasoning subtasks.
 
 Available agents:
-- code_agent: writes and runs Python code for precise computations.
-- math_agent: solves math questions by step-by-step reasoning.
-- search_agent: retrieves missing evidence from the local IIRC Wikipedia corpus.
-- commonsense_agent: performs reading comprehension, evidence synthesis, and general reasoning.
+- context_agent: extracts relevant facts, entities, dates, and constraints that
+  are explicitly present in the initial passage.
+- retrieval_agent: retrieves one missing fact from one named linked article or
+  one clearly specified target in the local IIRC Wikipedia corpus.
+- reasoning_agent: compares and combines already extracted evidence without
+  performing new retrieval or numerical computation.
+- calculation_agent: performs arithmetic, counting, date, or other precise
+  calculations using already collected evidence.
+- answerability_agent: determines whether the collected evidence is sufficient
+  to answer the question and identifies a genuinely unanswerable question.
 
 Output only valid JSON in this format:
 [
   {
     "id": 1,
-    "task": "subtask description",
-    "agent": "math_agent",
+    "task": "detailed executable subtask",
+    "agent": "context_agent",
     "reason": "why this agent is suitable",
     "dep": []
   }
 ]
 
 Rules:
-- Include all important entities, numbers, constraints, and dates from the query.
-- Use dependencies in "dep" when a subtask needs previous results.
-- Use the initial passage and available linked article titles in the user input.
-- Add retrieval subtasks when the initial passage does not contain enough information.
-- Do not assume that every IIRC question is answerable.
-- If the query can be solved by one agent, output one subtask.
+- Preserve all important entities, numbers, constraints, dates, and linked
+  article titles from the input.
+- First identify the independent evidence targets needed to answer the question.
+- When the initial passage contains relevant evidence, create one
+  context_agent task to extract it.
+- Create a separate retrieval_agent task for each independently retrievable
+  missing fact. Each retrieval task must name one evidence target and preferably
+  one available linked article. Do not combine unrelated facts or articles into
+  one retrieval task.
+- The context_agent and independently executable retrieval_agent tasks can all
+  read the original input, so give them "dep": []. Do not make retrieval depend
+  on context extraction when its target is already explicit in the input.
+- A task that needs a previous result must list the exact step ids in "dep".
+  reasoning_agent, calculation_agent, and answerability_agent tasks normally
+  depend on the evidence-gathering steps they consume.
+- Use calculation_agent only when an explicit computation is required. Use
+  answerability_agent only when evidence sufficiency must be decided.
+- Do not invent evidence targets, duplicate a retrieval, or create a subtask
+  solely to increase the number of agents.
+- If the question genuinely needs only one operation, output one subtask.
+- Keep the plan concise, normally no more than five steps.
 """
 
-math_agent_prompt = """You are a math agent. Solve the subtask using the original query and previous results.
-
-Original query: %s
-Subtask: %s
-History:
-%s
-
-Answer the subtask clearly and concisely.
-"""
-
-code_agent_prompt = """You are a code agent. Write Python code to solve the subtask using the original query and previous results.
-Return only one Python code block.
-
-Original query: %s
-Subtask: %s
-History:
-%s
-
-Code:
-"""
-
-rewrite_code_agent_prompt = """Given the subtask, Python code, and code output, write a concise natural-language answer.
-
-Subtask: %s
-Code:
-%s
-Code output:
-%s
-
-Answer:
-"""
-
-rewrite_math_agent_prompt = """Given the subtask and the math agent's original answer, rewrite the result into a concise final answer.
-
-Subtask: %s
-Original answer:
-%s
-
-Answer:
-"""
-
-search_agent_prompt = """Write a concise local-corpus search query for the subtask.
+context_agent_prompt = """You are an IIRC context agent. Extract only the facts requested by the subtask from the initial passage. Do not use outside knowledge or invent missing evidence.
 
 Original IIRC question and initial context:
 %s
-
 Subtask: %s
 History:
 %s
 
-Prefer exact linked article titles shown in the initial context when relevant.
+Return the relevant passage evidence and a concise conclusion.
+"""
+
+retrieval_agent_prompt = """Write one concise local-corpus search query for the specified missing evidence target.
+
+Original IIRC question and initial context:
+%s
+Subtask: %s
+History:
+%s
+
+Prefer the exact linked article title named in the subtask or initial context.
+Search for only this subtask's evidence target.
 Output only the search query:
 """
 
-rewrite_search_agent_prompt = """Answer the search question using the search snippets. Be concise and cite no unavailable details.
+rewrite_retrieval_agent_prompt = """Answer the retrieval subtask using only the local-corpus snippets.
 
-Question: %s
+Subtask: %s
 Search snippets:
+%s
+
+Return the requested evidence and state clearly when the snippets do not contain it.
+"""
+
+reasoning_agent_prompt = """You are an IIRC reasoning agent. Compare and combine the supplied evidence to solve the subtask. Do not claim facts absent from the initial context or dependency results.
+
+Original IIRC question and initial context:
+%s
+Subtask: %s
+Dependency results:
+%s
+
+Return a concise evidence-based conclusion.
+"""
+
+calculation_agent_prompt = """You are an IIRC calculation agent. Perform the exact arithmetic, counting, date, or comparison operation requested by the subtask.
+
+Original IIRC question and initial context:
+%s
+Subtask: %s
+Evidence and previous results:
+%s
+
+Show the essential calculation and return the result.
+"""
+
+rewrite_calculation_agent_prompt = """Rewrite the calculation response as a concise evidence-based answer to the subtask.
+
+Subtask: %s
+Calculation response:
 %s
 
 Answer:
 """
 
-commonsense_agent_prompt = """You are a reading-comprehension and commonsense agent. Answer the subtask using the original IIRC question, initial passage, and previous results.
+answerability_agent_prompt = """You are an IIRC answerability agent. Decide whether the available evidence is sufficient to answer the subtask. Treat the question as unanswerable only when the required fact cannot be established from the initial passage and retrieved evidence.
 
-Original query: %s
+Original IIRC question and initial context:
+%s
 Subtask: %s
-History:
+Evidence and previous results:
 %s
 
-Answer:
+Return either a supported answer or a concise explanation that the question is unanswerable.
 """
 
 summarization_agent_prompt = """Use the subtask answers to produce the final answer to the original query.

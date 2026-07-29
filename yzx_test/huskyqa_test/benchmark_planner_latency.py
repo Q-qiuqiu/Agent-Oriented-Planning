@@ -10,16 +10,30 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
+# Keep the original repository prompt and only strengthen task/reason detail.
+LATENCY_TEST_PLANNER_PROMPT = planner_prompt + """
+
+Additional output-detail requirements:
+- Keep the original JSON schema and output only the JSON array.
+- Write detailed, executable "task" values and detailed, specific "reason"
+  values. Do not add unnecessary subtasks or fields.
+"""
+
+
 # Edit these values directly before running the script.
 CONFIG = {
-    "api_url": "http://127.0.0.1:7002/v1",
+    # "api_url": "http://10.137.144.97:7002/v1",
+    # "model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "api_url": "http://10.137.144.97:7004/v1",
+    "model": "/data/labshare/Param/llada",
     "api_key": "empty",
-    "model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "dataset_path": "benchmarks/huskyqa/huskyqa_raw.json",
-    "source_index": 0,
+    "source_index": 2,
     "custom_query": None,
     "temperature": 0.0,
-    "max_tokens": 1024,
+    # Keep LLaDA's fixed diffusion output short enough for a single RTX 3090.
+    # Valid with block_size=32: 512 / 32 = 16, and 128 % 16 = 0.
+    "max_tokens": 512,
     "timeout": 600,
     "warmup_requests": 0,
     "measured_requests": 1,
@@ -32,7 +46,6 @@ def load_query():
         return {
             "source_index": "custom",
             "query": CONFIG["custom_query"],
-            "planner_input": CONFIG["custom_query"],
         }
 
     with Path(CONFIG["dataset_path"]).open("r", encoding="utf-8") as file:
@@ -41,11 +54,9 @@ def load_query():
     for row in rows:
         if str(row.get("index")) != str(CONFIG["source_index"]):
             continue
-        query = row.get("query") or row.get("question")
         return {
             "source_index": row.get("index"),
-            "query": query,
-            "planner_input": query,
+            "query": row.get("query") or row.get("question"),
         }
     raise ValueError(
         f"No query with source_index={CONFIG['source_index']!r} in "
@@ -74,8 +85,8 @@ def request_plan(query_record):
     payload = {
         "model": CONFIG["model"],
         "messages": [
-            {"role": "system", "content": planner_prompt},
-            {"role": "user", "content": query_record["planner_input"]},
+            {"role": "system", "content": LATENCY_TEST_PLANNER_PROMPT},
+            {"role": "user", "content": query_record["query"]},
         ],
         "temperature": CONFIG["temperature"],
         "max_tokens": CONFIG["max_tokens"],
@@ -89,7 +100,11 @@ def request_plan(query_record):
         timeout=CONFIG["timeout"],
     )
     elapsed = time.perf_counter() - started
-    response.raise_for_status()
+    if not response.ok:
+        raise RuntimeError(
+            f"Planner request failed with HTTP {response.status_code}: "
+            f"{response.text}"
+        )
     data = response.json()
     raw_output = data["choices"][0]["message"]["content"].strip()
 
@@ -104,6 +119,12 @@ def request_plan(query_record):
 
     usage = data.get("usage") or {}
     completion_tokens = usage.get("completion_tokens")
+    effective_tps = (
+        completion_tokens / elapsed
+        if completion_tokens is not None and elapsed
+        else None
+    )
+    server_metrics = data.get("fastdllm") or {}
     return {
         "http_round_trip_seconds": elapsed,
         "parse_seconds": parse_seconds,
@@ -111,11 +132,13 @@ def request_plan(query_record):
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": completion_tokens,
         "total_tokens": usage.get("total_tokens"),
-        "completion_tokens_per_second": (
-            completion_tokens / elapsed
-            if completion_tokens is not None and elapsed
-            else None
-        ),
+        "effective_tps": effective_tps,
+        "server_generation_seconds": server_metrics.get("generation_time"),
+        "server_generation_tps": server_metrics.get("generation_tps"),
+        "server_nfe": server_metrics.get("nfe"),
+        "server_steps": server_metrics.get("steps"),
+        "server_block_size": server_metrics.get("block_size"),
+        "server_cache_mode": server_metrics.get("cache_mode"),
         "finish_reason": data["choices"][0].get("finish_reason"),
         "plan": plan,
         "raw_output": raw_output,
@@ -124,14 +147,42 @@ def request_plan(query_record):
 
 
 def timing_summary(measurements):
-    values = [item["http_round_trip_seconds"] for item in measurements]
+    latencies = [item["http_round_trip_seconds"] for item in measurements]
+    completion_tokens = [
+        item["completion_tokens"]
+        for item in measurements
+        if item["completion_tokens"] is not None
+    ]
+    effective_tps = [
+        item["effective_tps"]
+        for item in measurements
+        if item["effective_tps"] is not None
+    ]
+    server_tps = [
+        item["server_generation_tps"]
+        for item in measurements
+        if item["server_generation_tps"] is not None
+    ]
     return {
-        "count": len(values),
-        "mean_seconds": statistics.mean(values),
-        "median_seconds": statistics.median(values),
-        "min_seconds": min(values),
-        "max_seconds": max(values),
+        "count": len(latencies),
+        "mean_seconds": statistics.mean(latencies),
+        "median_seconds": statistics.median(latencies),
+        "min_seconds": min(latencies),
+        "max_seconds": max(latencies),
+        "mean_generated_tokens": (
+            statistics.mean(completion_tokens) if completion_tokens else None
+        ),
+        "mean_effective_tps": (
+            statistics.mean(effective_tps) if effective_tps else None
+        ),
+        "mean_server_generation_tps": (
+            statistics.mean(server_tps) if server_tps else None
+        ),
     }
+
+
+def format_metric(value):
+    return f"{value:.2f}" if value is not None else "N/A"
 
 
 def save_result(result):
@@ -164,28 +215,40 @@ def main():
         print(
             f"measure {index + 1}/{CONFIG['measured_requests']} "
             f"| latency={measurement['http_round_trip_seconds']:.4f}s "
+            f"| prompt_tokens={measurement['prompt_tokens']} "
+            f"| generated_tokens={measurement['completion_tokens']} "
+            f"| effective_tps={format_metric(measurement['effective_tps'])} "
+            f"| server_tps={format_metric(measurement['server_generation_tps'])} "
+            f"| nfe={measurement['server_nfe']} "
             f"| steps={len(measurement['plan'] or [])} "
             f"| error={measurement['parse_error']}",
             flush=True,
         )
 
+    summary = timing_summary(measurements)
     result = {
+        "planner_mode": "single_stage_original_prompt_with_detailed_fields",
         "api_url": chat_completions_url(CONFIG["api_url"]),
         "model": CONFIG["model"],
         "source_index": query_record["source_index"],
         "query": query_record["query"],
         "warmup_requests": CONFIG["warmup_requests"],
-        "timing_summary": timing_summary(measurements),
+        "timing_summary": summary,
         "measurements": measurements,
     }
     output = save_result(result)
 
     print("\nPlanner latency summary")
     print(
-        f"mean={result['timing_summary']['mean_seconds']:.4f}s "
-        f"| median={result['timing_summary']['median_seconds']:.4f}s "
-        f"| min={result['timing_summary']['min_seconds']:.4f}s "
-        f"| max={result['timing_summary']['max_seconds']:.4f}s"
+        f"mean={summary['mean_seconds']:.4f}s "
+        f"| median={summary['median_seconds']:.4f}s "
+        f"| min={summary['min_seconds']:.4f}s "
+        f"| max={summary['max_seconds']:.4f}s"
+    )
+    print(
+        f"generated_tokens={summary['mean_generated_tokens']} "
+        f"| effective_tps={format_metric(summary['mean_effective_tps'])} "
+        f"| server_tps={format_metric(summary['mean_server_generation_tps'])}"
     )
     print(f"Result JSON: {output}")
 

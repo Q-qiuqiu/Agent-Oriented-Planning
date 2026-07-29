@@ -2,7 +2,7 @@ from pathlib import Path
 
 from iirc_retrieval import search_iirc
 from planner import agent, response_text
-from prompt import rewrite_search_agent_prompt
+from prompt import rewrite_retrieval_agent_prompt
 
 
 # Edit these defaults directly when using the legacy get_response.py entry point.
@@ -24,7 +24,7 @@ class IIRCSearch:
             for item in results
         ]
         rewrite = agent(
-            rewrite_search_agent_prompt % (task or query, snippets),
+            rewrite_retrieval_agent_prompt % (task or query, snippets),
             model=model,
         )
         return response_text(rewrite), snippets

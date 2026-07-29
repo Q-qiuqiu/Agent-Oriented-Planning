@@ -242,7 +242,8 @@ def simulate(plans, device_count, agent_models):
         for _ in range(device_count)
     ]
     total_collisions = 0
-    total_cold_starts = 0
+    total_first_batch_agent_calls = 0
+    total_first_batch_cold_starts = 0
     total_slots = 0
     clock = 0
 
@@ -250,6 +251,7 @@ def simulate(plans, device_count, agent_models):
         tasks, _ = prepare_tasks(plan, agent_models)
         completed = 0
         full_mask = (1 << len(tasks)) - 1
+        slot_index = 0
 
         while completed != full_mask:
             selected = select_ready_tasks(tasks, completed, device_count)
@@ -267,18 +269,27 @@ def simulate(plans, device_count, agent_models):
                 selected,
                 clock,
             )
-            total_collisions += len(collision_devices)
-            total_cold_starts += cold_starts
+
+            # Count only independent tasks actually dispatched in this query's
+            # first slot. Later tasks still update model residency and LRU state.
+            if slot_index == 0:
+                total_first_batch_agent_calls += len(assignments)
+                total_collisions += len(collision_devices)
+                total_first_batch_cold_starts += cold_starts
 
             for task_index, device_index in assignments.items():
                 completed |= 1 << task_index
                 devices[device_index]["requests"] += 1
-            for device_index in collision_devices:
-                devices[device_index]["collisions"] += 1
+            if slot_index == 0:
+                for device_index in collision_devices:
+                    devices[device_index]["collisions"] += 1
+            slot_index += 1
 
     return {
         "model_switch_events": total_collisions,
-        "cold_starts": total_cold_starts,
+        "first_batch_model_switch_events": total_collisions,
+        "first_batch_agent_calls": total_first_batch_agent_calls,
+        "first_batch_cold_starts": total_first_batch_cold_starts,
         "execution_slots": total_slots,
         "final_models": [device["model"] for device in devices],
         "device_summaries": [
@@ -304,6 +315,7 @@ def print_markdown_table(rows):
     headers = [
         "Model configuration",
         "Devices",
+        "First-batch calls",
         "Collisions",
         "Collision rate",
         "Avg collisions/query",
@@ -312,6 +324,7 @@ def print_markdown_table(rows):
         [
             row["model_configuration"],
             str(row["devices"]),
+            str(row["first_batch_agent_calls"]),
             str(row["model_switch_events"]),
             f"{row['collision_rate']:.2%}",
             f"{row['average_collisions_per_query']:.4f}",
@@ -373,7 +386,9 @@ def main():
             result = simulate(plans, device_count, agent_models)
             collisions = result["model_switch_events"]
             collision_rate = (
-                collisions / total_agent_calls if total_agent_calls else 0.0
+                collisions / result["first_batch_agent_calls"]
+                if result["first_batch_agent_calls"]
+                else 0.0
             )
             average_collisions = (
                 collisions / total_queries if total_queries else 0.0
@@ -401,6 +416,23 @@ def main():
 
     summary = {
         "replacement_policy": "LRU",
+        "collision_definition": {
+            "counted_scope": (
+                "Only model replacements caused by independent tasks actually "
+                "dispatched in each query's first scheduling slot."
+            ),
+            "excluded_scope": (
+                "Queued independent tasks and all later dependent tasks. They "
+                "still execute and update model residency and LRU state."
+            ),
+            "initial_empty_device_load": "cold start, not a collision",
+            "collision_rate": (
+                "first-batch model switch events / first-batch agent calls"
+            ),
+            "average_collisions_per_query": (
+                "first-batch model switch events / total queries"
+            ),
+        },
         "plans": args.plans,
         "total_queries": total_queries,
         "total_agent_calls": total_agent_calls,

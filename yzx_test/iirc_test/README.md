@@ -7,15 +7,25 @@ running model calls.
 
 ## Agent Roles
 
-- `search_agent`: generates a search query, retrieves from the local IIRC
-  Wikipedia corpus, and rewrites the retrieved snippets into an answer.
-- `commonsense_agent`: reads the initial passage and performs evidence synthesis.
-- `math_agent`: performs arithmetic and step-by-step mathematical reasoning.
-- `code_agent`: writes and executes Python for precise calculations.
+- `context_agent`: extracts relevant evidence explicitly present in the initial
+  passage.
+- `retrieval_agent`: retrieves one missing fact from one linked article or
+  local-corpus evidence target.
+- `reasoning_agent`: compares and combines previously collected evidence.
+- `calculation_agent`: performs arithmetic, counting, date, and other precise
+  calculations over collected evidence.
+- `answerability_agent`: determines whether the available evidence supports an
+  answer or the question is genuinely unanswerable.
 
-The search agent does not use DDGS or an external search API. It performs one
-model call to generate a query, retrieves up to five records from SQLite FTS5,
-then performs a second model call to answer from those snippets.
+The retrieval agent does not use DDGS or an external search API. It performs
+one model call to generate a query, retrieves up to five records from SQLite
+FTS5, then performs a second model call to answer from those snippets.
+
+The planner keeps independently executable context extraction and retrieval
+tasks in the initial `dep=[]` batch. It creates one retrieval task per missing
+evidence target and puts evidence synthesis, calculation, and answerability
+checks after the evidence tasks. It does not create redundant steps merely to
+increase the number of agents.
 
 ## Data Preparation
 
@@ -39,7 +49,7 @@ summary prompts.
 
 ## Planner
 
-Generate and save plans, then expand every planned subtask across all four roles
+Generate and save plans, then expand every planned subtask across all five roles
 for role-fit testing:
 
 ```bash
@@ -48,10 +58,12 @@ python3 iirc_test/build_subtask_benchmark.py
 
 Outputs:
 
-- `benchmarks/iirc/iirc_plans_llama3.json`
-- `benchmarks/iirc/iirc_subtask_llama3.json`
+- `benchmarks/iirc/iirc_plans_parallel_llama3.json`
+- `benchmarks/iirc/iirc_subtask_parallel_llama3.json`
 
-The script resumes successful planner records already present in the plan file.
+The new filenames keep these plans separate from the previous four-role plans.
+The script resumes successful planner records already present in the new plan
+file.
 
 ## Plan-Only Evaluation
 
@@ -73,7 +85,8 @@ python3 iirc_test/evaluate_agent_fit.py --mode respond
 python3 iirc_test/evaluate_agent_fit.py --mode judge
 ```
 
-The benchmark input is `benchmarks/iirc/iirc_subtask_llama3.json`. Change
+The benchmark input is
+`benchmarks/iirc/iirc_subtask_parallel_llama3.json`. Change
 `CONFIG["models"]`, `CONFIG["agents"]`, and the local/judge API blocks at the top
 of the script for each model.
 
@@ -89,8 +102,8 @@ python3 iirc_test/subtask_hetro.py --mode judge
 
 Outputs:
 
-- `iirc_test/results/subtask_hetro_responses_g_q_g_l.json`
-- `iirc_test/results/subtask_hetro_scores_g_q_g_l.json`
+- `iirc_test/results/subtask_hetro_responses_parallel_roles.json`
+- `iirc_test/results/subtask_hetro_scores_parallel_roles.json`
 
 ## Final Answer
 
@@ -120,6 +133,6 @@ python3 iirc_test/analyze_device_collisions.py
 ```
 
 The default configurations compare two and three devices under both the shared
-three-model mapping and four independent agent models. Detailed per-query call
+three-model mapping and five independent agent models. Detailed per-query call
 counts are saved in
 `iirc_test/results/device_collision_summary_lru.json`.

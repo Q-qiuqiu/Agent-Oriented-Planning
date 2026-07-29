@@ -22,28 +22,35 @@ from prompt import scorer_prompt
 # "api_url": "http://10.137.144.97:7003/v1",
 
 AGENT_CONFIG = {
-    "code_agent": {
+    "context_agent": {
+        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+        "api_url": "http://10.137.144.97:7003/v1",
+        "api_key": "empty",
+        "temperature": 0.0,
+        "timeout": 120,
+    },
+    "retrieval_agent": {
+        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+        "api_url": "http://10.137.144.97:7003/v1",
+        "api_key": "empty",
+        "temperature": 0.0,
+        "timeout": 120,
+    },
+    "reasoning_agent": {
+        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+        "api_url": "http://10.137.144.97:7003/v1",
+        "api_key": "empty",
+        "temperature": 0.0,
+        "timeout": 120,
+    },
+    "calculation_agent": {
         "model": "/data/labshare/Param/gemma-3-4b-it",
         "api_url": "http://10.137.144.97:7002/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
-    "math_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-        "api_url": "http://10.137.144.97:7003/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "search_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-        "api_url": "http://10.137.144.97:7003/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "commonsense_agent": {
+    "answerability_agent": {
         "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
         "api_url": "http://10.137.144.97:7003/v1",
         "api_key": "empty",
@@ -56,9 +63,9 @@ AGENT_CONFIG = {
 # Edit these defaults directly before running the script.
 CONFIG = {
     "mode": "respond",
-    "plans": "benchmarks/iirc/iirc_plans_llama3.json",
-    "responses": "iirc_test/results/subtask_hetro_responses_g_q_q_q.json",
-    "output": "iirc_test/results/subtask_hetro_scores_g_q_q_q.json",
+    "plans": "benchmarks/iirc/iirc_plans_parallel_llama3.json",
+    "responses": "iirc_test/results/subtask_hetro_responses_q_q_q_q_q.json",
+    "output": "iirc_test/results/subtask_hetro_scores_q_q_q_q_q.json",
     "limit": None,
     "force": False,
     "retry_errors": True,

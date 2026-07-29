@@ -1,24 +1,15 @@
-import re
-import subprocess
-import sys
 import time
 
 from planner import agent, response_text
 from prompt import (
-    code_agent_prompt,
-    commonsense_agent_prompt,
-    math_agent_prompt,
-    rewrite_code_agent_prompt,
-    search_agent_prompt,
+    answerability_agent_prompt,
+    calculation_agent_prompt,
+    context_agent_prompt,
+    reasoning_agent_prompt,
+    retrieval_agent_prompt,
     summarization_agent_prompt,
 )
 from search import IIRCSearch
-from utils import simplify_answer
-
-
-def _extract_python_code(text):
-    match = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL)
-    return match.group(1).strip() if match else text.strip()
 
 
 def _call_agent(prompt, model="gpt-4o"):
@@ -38,8 +29,18 @@ def get_response(
     history = history or "None"
     original_input = agent_context or query
 
-    if agent_name == "math_agent":
-        prompt = math_agent_prompt % (original_input, subtask, history)
+    direct_prompts = {
+        "context_agent": context_agent_prompt,
+        "reasoning_agent": reasoning_agent_prompt,
+        "calculation_agent": calculation_agent_prompt,
+        "answerability_agent": answerability_agent_prompt,
+    }
+    if agent_name in direct_prompts:
+        prompt = direct_prompts[agent_name] % (
+            original_input,
+            subtask,
+            history,
+        )
         answer = _call_agent(prompt, model=model)
         return {
             "task": subtask,
@@ -48,47 +49,9 @@ def get_response(
             "time": time.time() - start_time,
         }
 
-    if agent_name == "commonsense_agent":
-        prompt = commonsense_agent_prompt % (original_input, subtask, history)
-        answer = _call_agent(prompt, model=model)
-        return {
-            "task": subtask,
-            "agent": agent_name,
-            "response": answer,
-            "time": time.time() - start_time,
-        }
-
-    if agent_name == "code_agent":
-        original_answer = _call_agent(
-            code_agent_prompt % (original_input, subtask, history),
-            model=model,
-        )
-        code = _extract_python_code(original_answer)
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        code_output = simplify_answer(result.stdout.strip(), convert_to_str=True)
-        if result.stderr.strip():
-            code_output = f"[ERROR] {result.stderr.strip()}"
-        rewritten = _call_agent(
-            rewrite_code_agent_prompt % (subtask, code, code_output),
-            model=model,
-        )
-        return {
-            "task": subtask,
-            "agent": agent_name,
-            "code": code,
-            "code_output": code_output,
-            "response": rewritten,
-            "time": time.time() - start_time,
-        }
-
-    if agent_name == "search_agent":
+    if agent_name == "retrieval_agent":
         search_query = _call_agent(
-            search_agent_prompt % (original_input, subtask, history),
+            retrieval_agent_prompt % (original_input, subtask, history),
             model=model,
         )
         answer, snippets = IIRCSearch(sqlite_path=sqlite_path).search(

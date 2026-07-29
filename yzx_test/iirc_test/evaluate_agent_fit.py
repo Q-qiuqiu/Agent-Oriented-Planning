@@ -1,38 +1,40 @@
 import argparse
 import json
 import re
-import subprocess
-import sys
 import time
 from pathlib import Path
 
-from get_response import _extract_python_code
 from iirc_retrieval import search_iirc
 from openai_compat import run_chat_completion
 from prompt import (
-    code_agent_prompt,
-    commonsense_agent_prompt,
-    math_agent_prompt,
-    rewrite_code_agent_prompt,
-    rewrite_math_agent_prompt,
-    rewrite_search_agent_prompt,
+    answerability_agent_prompt,
+    calculation_agent_prompt,
+    context_agent_prompt,
+    reasoning_agent_prompt,
+    retrieval_agent_prompt,
+    rewrite_calculation_agent_prompt,
+    rewrite_retrieval_agent_prompt,
     scorer_prompt,
-    search_agent_prompt,
 )
-from utils import simplify_answer
 
 
-AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
+AGENTS = [
+    "context_agent",
+    "retrieval_agent",
+    "reasoning_agent",
+    "calculation_agent",
+    "answerability_agent",
+]
 
 #/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct
 #/data/labshare/Param/gemma-3-4b-it
 CONFIG = {
     "mode": "respond",
     "models": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-    "agents": ["search_agent"],
-    "benchmarks": "benchmarks/iirc/iirc_subtask_llama3.json",
-    "responses": "iirc_test/results/agent_fit_responses_qwen3.json",
-    "output": "iirc_test/results/agent_fit_results_qwen3.json",
+    "agents": ["retrieval_agent"],
+    "benchmarks": "benchmarks/iirc/iirc_subtask_parallel_llama3.json",
+    "responses": "iirc_test/results/agent_fit_responses_parallel_roles_qwen3.json",
+    "output": "iirc_test/results/agent_fit_results_parallel_roles_qwen3.json",
     "local_api_url": "http://10.137.144.97:7003/v1",
     "local_api_key": "empty",
     "local_temperature": 0.0,
@@ -50,19 +52,13 @@ CONFIG = {
 
 DEFAULT_BENCHMARKS = [
     {
-        "agent": "math_agent",
-        "query": "A store sold 36 notebooks on Monday and 48 on Tuesday. If each notebook costs 7 dollars, what was the total revenue?",
-        "task": "Calculate the total revenue from selling 36 notebooks and 48 notebooks at 7 dollars each.",
+        "agent": "context_agent",
+        "query": "Which university did the person attend?",
+        "task": "Extract the university explicitly named in the initial passage.",
         "history": "None",
     },
     {
-        "agent": "code_agent",
-        "query": "Find the median of the numbers 18, 7, 22, 5, 13, 9, 31.",
-        "task": "Write Python code to compute the median of [18, 7, 22, 5, 13, 9, 31].",
-        "history": "None",
-    },
-    {
-        "agent": "search_agent",
+        "agent": "retrieval_agent",
         "query": "In what country is the University of Geneva?",
         "task": "Retrieve the University of Geneva article and identify its country.",
         "history": "None",
@@ -73,10 +69,22 @@ DEFAULT_BENCHMARKS = [
         ),
     },
     {
-        "agent": "commonsense_agent",
-        "query": "If a glass cup is dropped on a concrete floor, what is likely to happen?",
-        "task": "Answer what is likely to happen when a glass cup is dropped on a concrete floor.",
-        "history": "None",
+        "agent": "reasoning_agent",
+        "query": "Did the two people live in the same country?",
+        "task": "Compare the two retrieved countries and determine whether they match.",
+        "history": "Person A lived in France.\nPerson B lived in Switzerland.",
+    },
+    {
+        "agent": "calculation_agent",
+        "query": "How many years apart were the two events?",
+        "task": "Calculate the difference between 1987 and 2003.",
+        "history": "The first event occurred in 1987.\nThe second event occurred in 2003.",
+    },
+    {
+        "agent": "answerability_agent",
+        "query": "What was the person's exact birth time?",
+        "task": "Determine whether the exact birth time can be answered from the evidence.",
+        "history": "The evidence provides a birth date but no time of day.",
     },
 ]
 
@@ -105,14 +113,15 @@ def normalize_models(models):
 
 def build_prompt(agent_name, query, task, history, agent_context=None):
     original_input = agent_context or query
-    if agent_name == "math_agent":
-        return math_agent_prompt % (original_input, task, history)
-    if agent_name == "code_agent":
-        return code_agent_prompt % (original_input, task, history)
-    if agent_name == "search_agent":
-        return search_agent_prompt % (original_input, task, history)
-    if agent_name == "commonsense_agent":
-        return commonsense_agent_prompt % (original_input, task, history)
+    prompts = {
+        "context_agent": context_agent_prompt,
+        "retrieval_agent": retrieval_agent_prompt,
+        "reasoning_agent": reasoning_agent_prompt,
+        "calculation_agent": calculation_agent_prompt,
+        "answerability_agent": answerability_agent_prompt,
+    }
+    if agent_name in prompts:
+        return prompts[agent_name] % (original_input, task, history)
     raise ValueError(f"Unknown agent: {agent_name}")
 
 
@@ -162,8 +171,8 @@ def format_for_scorer(
     search_top_k=5,
     iirc_sqlite_path="benchmarks/iirc/context_articles.sqlite3",
 ):
-    if agent_name == "math_agent":
-        rewrite_prompt = rewrite_math_agent_prompt % (task, raw_output)
+    if agent_name == "calculation_agent":
+        rewrite_prompt = rewrite_calculation_agent_prompt % (task, raw_output)
         try:
             rewritten = run_chat_completion(
                 model,
@@ -185,7 +194,7 @@ def format_for_scorer(
 """ % (raw_output, rewritten)
         return scorer_response, {"rewritten_response": rewritten}
 
-    if agent_name == "search_agent":
+    if agent_name == "retrieval_agent":
         search_query = raw_output.strip()
         snippets = search_snippets(
             search_query,
@@ -193,7 +202,7 @@ def format_for_scorer(
             search_top_k,
             iirc_sqlite_path,
         )
-        rewrite_prompt = rewrite_search_agent_prompt % (task, snippets)
+        rewrite_prompt = rewrite_retrieval_agent_prompt % (task, snippets)
         final_answer = run_chat_completion(
             model,
             rewrite_prompt,
@@ -204,48 +213,7 @@ def format_for_scorer(
         )
         return final_answer, {"search_query": search_query, "search_snippets": snippets}
 
-    if agent_name != "code_agent":
-        return raw_output, {}
-
-    code = _extract_python_code(raw_output)
-    metadata = {"code": code}
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        code_output = simplify_answer(result.stdout.strip(), convert_to_str=True)
-        if result.stderr.strip():
-            code_output = f"[ERROR] {result.stderr.strip()}"
-    except Exception as exc:
-        code_output = f"[ERROR] {exc}"
-
-    metadata["code_output"] = code_output
-    rewrite_prompt = rewrite_code_agent_prompt % (task, code, code_output)
-    try:
-        rewritten = run_chat_completion(
-            model,
-            rewrite_prompt,
-            local_api_url,
-            local_api_key,
-            local_timeout,
-            local_temperature,
-        )
-    except Exception:
-        rewritten = code_output
-
-    scorer_response = """
-[The Start of the Code to Solve the Question]
-%s
-[The End of the Code to Solve the Question]
-[The Start of the Rewritten Response by Running the Code]
-%s
-[The End of the Rewritten Response by Running the Code]
-""" % (code, rewritten)
-    metadata["rewritten_response"] = rewritten
-    return scorer_response, metadata
+    return raw_output, {}
 
 
 def response_key(model, item):
