@@ -6,17 +6,17 @@ from pathlib import Path
 
 # Edit these defaults directly before running the script.
 CONFIG = {
-    "plans": "benchmarks/iirc/iirc_plans_parallel_llama3.json",
+    "plans": "benchmarks/iirc/iirc_plans_llama3.json",
     "device_counts": [2, 3],
     "summary_output": "iirc_test/results/device_collision_summary_lru.json",
 }
 
 MODEL_CONFIGS = {
     "5 IIRC agents / 3 models": {
-        "context_agent": "llama3-3B",
+        "context_agent": "qwen3-4B",
         "retrieval_agent": "qwen3-4B",
         "reasoning_agent": "qwen3-4B",
-        "calculation_agent": "gemma3-4B",
+        "calculation_agent": "qwen3-4B",
         "answerability_agent": "qwen3-4B",
     },
     "5 IIRC agents / 5 independent models": {

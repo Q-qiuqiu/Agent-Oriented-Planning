@@ -12,11 +12,11 @@ from prompt import evaluate_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "input": "iirc_test/results/summary_result_parallel_roles.json",
+    "input": "iirc_test/results/summary_result_l_l_l_l_l.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "iirc_test/results/summary_score_parallel_roles.json",
+    "output": "iirc_test/results/summary_score_l_l_l_l_l.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",
