@@ -10,11 +10,11 @@ from prompt import evaluate_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "input": "huskyqa_test/results/summary_result_g_q_g_l.json",
+    "input": "huskyqa_test/results_1b/summary_result_d_d_d_d.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "huskyqa_test/results/summary_score_g_q_g_l.json",
+    "output": "huskyqa_test/results_1b/summary_score_d_d_d_d.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",

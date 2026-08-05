@@ -10,6 +10,61 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
+STANDARD_OUTPUT_BLOCK = """Output only valid JSON in this format:
+[
+  {
+    "id": 1,
+    "task": "detailed executable subtask",
+    "agent": "context_agent",
+    "reason": "why this agent is suitable",
+    "dep": []
+  }
+]"""
+
+LATENCY_TEST_OUTPUT_BLOCK = """For this single-query latency measurement,
+produce exactly two sections in the following order. The first section must be
+detailed enough to make the response substantially longer than the normal
+planner output.
+
+PLANNING_REASONING
+Explain in detailed prose:
+1. what useful information is already present in the initial passage;
+2. what evidence is missing and which linked articles may contain it;
+3. which evidence tasks can run independently in the first batch;
+4. which later tasks depend on earlier results;
+5. why every selected agent role is appropriate; and
+6. why the resulting plan is complete without redundant work.
+
+Make this reasoning section roughly as detailed as the JSON plan. Do not put
+JSON, square brackets, braces, or Markdown code fences in this section.
+END_PLANNING_REASONING
+
+PLAN_JSON
+[
+  {
+    "id": 1,
+    "task": "A detailed, self-contained, executable subtask that preserves all relevant entities, constraints, and expected evidence.",
+    "agent": "context_agent",
+    "reason": "A detailed explanation of why this role is the best fit and how its output supports the final answer.",
+    "dep": []
+  }
+]
+END_PLAN_JSON
+
+The PLAN_JSON section must contain one valid JSON array using the original
+schema. Make every task and reason detailed and self-contained. Do not add
+comments, trailing commas, extra fields, or prose inside the JSON array.
+"""
+
+if STANDARD_OUTPUT_BLOCK not in planner_prompt:
+    raise RuntimeError("Cannot locate the standard planner output instructions")
+LATENCY_TEST_PLANNER_PROMPT = planner_prompt.replace(
+    STANDARD_OUTPUT_BLOCK,
+    LATENCY_TEST_OUTPUT_BLOCK,
+    1,
+)
+
+
 # Edit these values directly before running the script.
 CONFIG = {
     "api_url": "http://127.0.0.1:7002/v1",
@@ -24,7 +79,7 @@ CONFIG = {
     "timeout": 600,
     "warmup_requests": 0,
     "measured_requests": 1,
-    "output": "iirc_test/results/planner_latency_single.json",
+    "output": "iirc_test/planner_latency_single.json",
 }
 
 
@@ -60,18 +115,60 @@ def load_query():
 
 
 def extract_json_array(text):
+    decoder = json.JSONDecoder()
     value = text.strip()
-    if value.startswith("```"):
-        match = re.search(r"```(?:json)?\s*(.*?)```", value, re.DOTALL)
-        if match:
-            value = match.group(1).strip()
-    start = value.find("[")
+    marker_matches = list(
+        re.finditer(r"(?m)^\s*PLAN_JSON\s*:?\s*$", value)
+    )
+    if marker_matches:
+        segment = value[marker_matches[-1].end():]
+        end_match = re.search(r"(?m)^\s*END_PLAN_JSON\s*$", segment)
+        if end_match:
+            segment = segment[:end_match.start()]
+        segment = re.sub(
+            r"(?m)^\s*```(?:json)?\s*$",
+            "",
+            segment,
+        ).strip()
+        start = segment.find("[")
+        if start < 0:
+            raise ValueError("PLAN_JSON contains no JSON array")
+        try:
+            plan, _ = decoder.raw_decode(segment[start:])
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Cannot parse PLAN_JSON array: {exc}") from exc
+        if not isinstance(plan, list) or not all(
+            isinstance(step, dict) for step in plan
+        ):
+            raise ValueError("PLAN_JSON must be an array of plan-step objects")
+        return plan
+
+    for match in re.finditer(r"\[", value):
+        try:
+            plan, _ = decoder.raw_decode(value[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(plan, list) and all(
+            isinstance(step, dict) for step in plan
+        ):
+            return plan
+    raise ValueError("Cannot find plan JSON in planner output")
+
+
+def extract_planning_reasoning(text):
+    start_marker = "PLANNING_REASONING"
+    end_marker = "END_PLANNING_REASONING"
+    start = text.find(start_marker)
     if start < 0:
-        raise ValueError("planner output contains no JSON array")
-    plan, _ = json.JSONDecoder().raw_decode(value[start:])
-    if not isinstance(plan, list):
-        raise ValueError("planner output JSON is not a list")
-    return plan
+        return None
+    start += len(start_marker)
+    end = text.find(end_marker, start)
+    if end < 0:
+        end = text.find("PLAN_JSON", start)
+    if end < 0:
+        return None
+    reasoning = text[start:end].strip(" \n:\t")
+    return reasoning or None
 
 
 def request_plan(query_record):
@@ -80,7 +177,7 @@ def request_plan(query_record):
     payload = {
         "model": CONFIG["model"],
         "messages": [
-            {"role": "system", "content": planner_prompt},
+            {"role": "system", "content": LATENCY_TEST_PLANNER_PROMPT},
             {"role": "user", "content": query_record["planner_input"]},
         ],
         "temperature": CONFIG["temperature"],
@@ -123,6 +220,7 @@ def request_plan(query_record):
             else None
         ),
         "finish_reason": data["choices"][0].get("finish_reason"),
+        "planning_reasoning": extract_planning_reasoning(raw_output),
         "plan": plan,
         "raw_output": raw_output,
         "parse_error": parse_error,
@@ -170,6 +268,7 @@ def main():
         print(
             f"measure {index + 1}/{CONFIG['measured_requests']} "
             f"| latency={measurement['http_round_trip_seconds']:.4f}s "
+            f"| reasoning_chars={len(measurement['planning_reasoning'] or '')} "
             f"| steps={len(measurement['plan'] or [])} "
             f"| error={measurement['parse_error']}",
             flush=True,
@@ -180,6 +279,7 @@ def main():
         "model": CONFIG["model"],
         "source_index": query_record["source_index"],
         "query": query_record["query"],
+        "planner_mode": "latency_test_reasoning_then_json",
         "used_agent_context": CONFIG["use_agent_context"],
         "warmup_requests": CONFIG["warmup_requests"],
         "timing_summary": timing_summary(measurements),

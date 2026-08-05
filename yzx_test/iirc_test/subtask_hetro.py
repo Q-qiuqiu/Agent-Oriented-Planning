@@ -27,36 +27,36 @@ from prompt import scorer_prompt
         # "api_url": "http://10.137.144.97:7005/v1",
 AGENT_CONFIG = {
     "context_agent": {
-        "model": "/data/labshare/Param/MiniCPM3-4B",
-        "api_url": "http://10.137.144.97:7015/v1",
+        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+        "api_url": "http://10.137.144.97:7027/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "retrieval_agent": {
-        "model": "/data/labshare/Param/MiniCPM3-4B",
-        "api_url": "http://10.137.144.97:7015/v1",
+        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+        "api_url": "http://10.137.144.97:7027/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "reasoning_agent": {
-        "model": "/data/labshare/Param/MiniCPM3-4B",
-        "api_url": "http://10.137.144.97:7015/v1",
+        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+        "api_url": "http://10.137.144.97:7027/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "calculation_agent": {
-        "model": "/data/labshare/Param/MiniCPM3-4B",
-        "api_url": "http://10.137.144.97:7015/v1",
+        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+        "api_url": "http://10.137.144.97:7027/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "answerability_agent": {
-        "model": "/data/labshare/Param/MiniCPM3-4B",
-        "api_url": "http://10.137.144.97:7015/v1",
+        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+        "api_url": "http://10.137.144.97:7027/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
@@ -68,8 +68,8 @@ AGENT_CONFIG = {
 CONFIG = {
     "mode": "respond",
     "plans": "benchmarks/iirc/iirc_plans_llama3.json",
-    "responses": "iirc_test/results/subtask_hetro_responses_p_p_p_p_p.json",
-    "output": "iirc_test/results/subtask_hetro_scores_p_p_p_p_p.json",
+    "responses": "iirc_test/results_1b/subtask_hetro_responses_m_m_m_m_m.json",
+    "output": "iirc_test/results_1b/subtask_hetro_scores_m_m_m_m_m.json",
     "limit": None,
     "force": False,
     "retry_errors": True,
@@ -79,10 +79,10 @@ CONFIG = {
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",
     "judge_model": "/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507",
+    #"judge_model": "/home/yzx/models/Qwen3-30B-A3B-Instruct-2507",
     "judge_temperature": 0.0,
     "judge_timeout": 120,
 }
-
 
 def load_json(path, default=None):
     if not path or not Path(path).exists():

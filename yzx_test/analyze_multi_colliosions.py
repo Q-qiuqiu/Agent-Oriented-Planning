@@ -19,22 +19,22 @@ CONFIG = {
 
 DATASET_MODEL_CONFIGS = {
     "huskyqa": {
-        "label": "g_d_m_l",
+        "label": "g_q_m_g",
         "agents": {
             "code_agent": "gemma3-4B",
-            "math_agent": "dwen3-4B",
-            "search_agent": "memma3-4B",
-            "commonsense_agent": "llama3",
+            "math_agent": "qwen3-4B",
+            "search_agent": "minicpm3-4B",
+            "commonsense_agent": "gemma3-4B",
         },
     },
     "iirc": {
-        "label": "q_q_q_q_g",
+        "label": "q_q_q_q_m",
         "agents": {
             "context_agent": "qwen3-4B",
             "retrieval_agent": "qwen3-4B",
             "reasoning_agent": "qwen3-4B",
             "calculation_agent": "qwen3-4B",
-            "answerability_agent": "gemma3-4B",
+            "answerability_agent": "minicpm3-4B",
         },
     },
 }
