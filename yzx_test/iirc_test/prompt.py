@@ -26,6 +26,10 @@ Output only valid JSON in this format:
 ]
 
 Rules:
+- The "agent" value must exactly match one of these five strings:
+  "context_agent", "retrieval_agent", "reasoning_agent",
+  "calculation_agent", or "answerability_agent". Never shorten, reword, or
+  derive variants such as "retrieve_agent" or "reasonability_agent".
 - Preserve all important entities, numbers, constraints, dates, and linked
   article titles from the input.
 - First identify the independent evidence targets needed to answer the question.

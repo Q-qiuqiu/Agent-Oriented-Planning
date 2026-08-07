@@ -14,11 +14,12 @@ AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
 # Edit these defaults directly when running from this file.
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
-    "plans_output": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
-    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_llama3.json",
-    "planner_api_url": "http://10.137.144.97:7002/v1",
+    "plans_output": "benchmarks/huskyqa/huskyqa_plans_llada.json",
+    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_llada.json",
+    "planner_api_url": "http://10.137.144.97:7004/v1",
     "planner_api_key": "empty",
-    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
     "timeout": 120,
     "limit": None,

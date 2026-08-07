@@ -67,10 +67,10 @@ LATENCY_TEST_PLANNER_PROMPT = planner_prompt.replace(
 
 # Edit these values directly before running the script.
 CONFIG = {
-    "api_url": "http://10.137.144.97:7002/v1",
-    "model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     # "api_url": "http://10.137.144.97:7002/v1",
-    # "model": "/data/labshare/Param/llada",
+    # "model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "api_url": "http://10.137.144.97:7004/v1",
+    "model": "/data/labshare/Param/llada",
     "api_key": "empty",
     "dataset_path": "benchmarks/huskyqa/huskyqa_raw.json",
     "source_index": 2,

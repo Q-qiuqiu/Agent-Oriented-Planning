@@ -27,16 +27,19 @@ detailed enough to make the response substantially longer than the normal
 planner output.
 
 PLANNING_REASONING
-Explain in detailed prose:
-1. what useful information is already present in the initial passage;
-2. what evidence is missing and which linked articles may contain it;
-3. which evidence tasks can run independently in the first batch;
-4. which later tasks depend on earlier results;
-5. why every selected agent role is appropriate; and
-6. why the resulting plan is complete without redundant work.
+Write exactly six numbered sentences, one sentence for each item below. Each
+sentence must contain at most 35 words, and the whole section must contain at
+most 210 words. Never repeat a fact, evidence target, operation, or sentence.
+1. Useful information already present in the initial passage.
+2. Missing evidence and the linked articles that may contain it.
+3. Evidence tasks that can run independently in the first batch.
+4. Later tasks and their dependencies on earlier results.
+5. Why the selected agent roles are appropriate.
+6. Why the plan is complete without unnecessary or duplicate work.
 
-Make this reasoning section roughly as detailed as the JSON plan. Do not put
-JSON, square brackets, braces, or Markdown code fences in this section.
+Do not put JSON, square brackets, braces, or Markdown code fences in this
+section. After sentence 6, immediately write END_PLANNING_REASONING and then
+the PLAN_JSON section. Do not continue or expand the reasoning.
 END_PLANNING_REASONING
 
 PLAN_JSON
@@ -67,9 +70,11 @@ LATENCY_TEST_PLANNER_PROMPT = planner_prompt.replace(
 
 # Edit these values directly before running the script.
 CONFIG = {
-    "api_url": "http://127.0.0.1:7002/v1",
     "api_key": "empty",
+    "api_url": "http://127.0.0.1:7002/v1",
     "model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    # "api_url": "http://10.137.144.97:7004/v1",
+    # "model": "/data/labshare/Param/llada",
     "dataset_path": "benchmarks/iirc/iirc_dev_flat.json",
     "source_index": "q_10839",
     "custom_query": None,
@@ -220,6 +225,10 @@ def request_plan(query_record):
             else None
         ),
         "finish_reason": data["choices"][0].get("finish_reason"),
+        "has_reasoning_end_marker": "END_PLANNING_REASONING" in raw_output,
+        "has_plan_marker": bool(
+            re.search(r"(?m)^\s*PLAN_JSON\s*:?\s*$", raw_output)
+        ),
         "planning_reasoning": extract_planning_reasoning(raw_output),
         "plan": plan,
         "raw_output": raw_output,
@@ -268,7 +277,10 @@ def main():
         print(
             f"measure {index + 1}/{CONFIG['measured_requests']} "
             f"| latency={measurement['http_round_trip_seconds']:.4f}s "
+            f"| generated_tokens={measurement['completion_tokens']} "
+            f"| finish={measurement['finish_reason']} "
             f"| reasoning_chars={len(measurement['planning_reasoning'] or '')} "
+            f"| plan_marker={measurement['has_plan_marker']} "
             f"| steps={len(measurement['plan'] or [])} "
             f"| error={measurement['parse_error']}",
             flush=True,
