@@ -11,52 +11,75 @@ from evaluate_agent_fit import (
 )
 from openai_compat import run_chat_completion
 from prompt import scorer_prompt
+################################ 3-4b model ###################################
+        # "model": "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
+        # "api_url": "http://10.137.144.97:7011/v1",
 
-# "model": "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
-# "api_url": "http://10.137.144.97:7001/v1",
+        # "model": "/data/labshare/Param/gemma-3-4b-it",
+        # "api_url": "http://10.137.144.97:7012/v1",
 
-# "model": "/data/labshare/Param/gemma-3-4b-it",
-# "api_url": "http://10.137.144.97:7002/v1",
-
-# "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-# "api_url": "http://10.137.144.97:7003/v1",
+        # "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+        # "api_url": "http://10.137.144.97:7013/v1",
 
         # "model": "/data/labshare/Param/Phi-4-mini-instruct",
-        # "api_url": "http://10.137.144.97:7004/v1",
+        # "api_url": "http://10.137.144.97:7014/v1",
+
         # "model": "/data/labshare/Param/MiniCPM3-4B",
-        # "api_url": "http://10.137.144.97:7005/v1",
+        # "api_url": "http://10.137.144.97:7015/v1",
+
+################################ 1-2b model ###################################
+        # "model": "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct",
+        # "api_url": "http://10.137.144.97:7021/v1",
+
+        # "model": "/data/labshare/Param/gemma-3-1b-it",
+        # "api_url": "http://10.137.144.97:7022/v1",
+
+        # "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
+        # "api_url": "http://10.137.144.97:7023/v1",
+
+        # "model": "/data/labshare/Param/Hunyuan-1.8B-Instruct",
+        # "api_url": "http://10.137.144.97:7024/v1",
+
+        # "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
+        # "api_url": "http://10.137.144.97:7025/v1",
+
+        # "model": "/data/labshare/Param/MiniCPM5-1B",
+        # "api_url": "http://10.137.144.97:7026/v1",
+
+        # "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+        # "api_url": "http://10.137.144.97:7027/v1",
 AGENT_CONFIG = {
     "context_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/MiniCPM5-1B",
+        "api_url": "http://10.137.144.97:7026/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "retrieval_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/MiniCPM5-1B",
+        "api_url": "http://10.137.144.97:7026/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "reasoning_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/MiniCPM5-1B",
+        "api_url": "http://10.137.144.97:7026/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "calculation_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/MiniCPM5-1B",
+        "api_url": "http://10.137.144.97:7026/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "answerability_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/MiniCPM5-1B",
+        "api_url": "http://10.137.144.97:7026/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
@@ -67,9 +90,9 @@ AGENT_CONFIG = {
 # Edit these defaults directly before running the script.
 CONFIG = {
     "mode": "respond",
-    "plans": "benchmarks/iirc/iirc_plans_llama3.json",
-    "responses": "iirc_test/results_1b/subtask_hetro_responses_m_m_m_m_m.json",
-    "output": "iirc_test/results_1b/subtask_hetro_scores_m_m_m_m_m.json",
+    "plans": "benchmarks/iirc/iirc_plans_llada.json",
+    "responses": "iirc_test/results_1b_llada/subtask_hetro_responses_m_m_m_m_m.json",
+    "output": "iirc_test/results_1b_llada/subtask_hetro_scores_p_p_p_p_p.json",
     "limit": None,
     "force": False,
     "retry_errors": True,
