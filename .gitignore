@@ -3,3 +3,4 @@ yzx_test/huskyqa_test/__pycache__/
 yzx_test/iirc_test/__pycache__/
 yzx_test/benchmarks/iirc/*.sqlite3
 yzx_test/__pycache__/
+__pycache__/
