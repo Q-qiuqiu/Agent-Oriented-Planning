@@ -11,7 +11,7 @@ CONFIG = {
     # Each round appends this many HuskyQA queries, then this many IIRC queries.
     # For example, 1:5 produces H, I, I, I, I, I, H, ...
     "huskyqa_queries_per_group": 1,
-    "iirc_queries_per_group": 1,
+    "iirc_queries_per_group": 3,
     "iirc_partitions": 5,
     "device_counts": [1, 2, 3, 4],
     "summary_output": "multi_collision_summary_lru.json",
@@ -19,12 +19,12 @@ CONFIG = {
 
 DATASET_MODEL_CONFIGS = {
     "huskyqa": {
-        "label": "g_q_m_g",
+        "label": "qc_q_f_m",
         "agents": {
-            "code_agent": "gemma3-4B",
-            "math_agent": "qwen3-4B",
-            "search_agent": "minicpm3-4B",
-            "commonsense_agent": "gemma3-4B",
+            "code_agent": "qwen2.5-coder-1.5b",
+            "math_agent": "qwen3-1.7b",
+            "search_agent": "lfm2.5-1.2b",
+            "commonsense_agent": "minicpm5-1b",
         },
     },
     "iirc": {
@@ -129,14 +129,26 @@ def partition_plans(plans, partition_count):
 def prepare_tasks(dataset, plan):
     agent_models = DATASET_MODEL_CONFIGS[dataset]["agents"]
     raw_tasks = plan.get("plan") or []
-    indices_by_id = {
-        normalize_id(task.get("id")): index
-        for index, task in enumerate(raw_tasks)
-    }
     tasks = []
     dependency_issues = []
 
-    for task in raw_tasks:
+    indices_by_id = {}
+    for index, task in enumerate(raw_tasks):
+        task_id = normalize_id(task.get("id"))
+        if task_id in indices_by_id:
+            dependency_issues.append(
+                {
+                    "dataset": dataset,
+                    "source_index": plan.get("source_index"),
+                    "step_id": task.get("id"),
+                    "dependency": task.get("id"),
+                    "reason": "duplicate top-level step id; first occurrence retained",
+                }
+            )
+            continue
+        indices_by_id[task_id] = index
+
+    for task_index, task in enumerate(raw_tasks):
         agent = task.get("agent") or task.get("name") or task.get("name_1")
         if agent not in agent_models:
             raise ValueError(
@@ -163,7 +175,33 @@ def prepare_tasks(dataset, plan):
                     }
                 )
                 continue
-            dependencies.append(indices_by_id[dependency_id])
+            dependency_index = indices_by_id[dependency_id]
+            if dependency_index >= task_index:
+                dependency_issues.append(
+                    {
+                        "dataset": dataset,
+                        "source_index": plan.get("source_index"),
+                        "step_id": task.get("id"),
+                        "dependency": dependency,
+                        "reason": (
+                            "dependency must reference an earlier step; "
+                            "self/forward dependency ignored"
+                        ),
+                    }
+                )
+                continue
+            if dependency_index in dependencies:
+                dependency_issues.append(
+                    {
+                        "dataset": dataset,
+                        "source_index": plan.get("source_index"),
+                        "step_id": task.get("id"),
+                        "dependency": dependency,
+                        "reason": "duplicate dependency ignored",
+                    }
+                )
+                continue
+            dependencies.append(dependency_index)
 
         tasks.append(
             {

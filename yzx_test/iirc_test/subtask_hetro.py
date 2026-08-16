@@ -48,38 +48,50 @@ from prompt import scorer_prompt
 
         # "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
         # "api_url": "http://10.137.144.97:7027/v1",
+        
+        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct",
+        # "api_url": "http://10.137.144.97:7028/v1",
+
+        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        # "api_url": "http://10.137.144.97:7029/v1",
+
+        # "model": "/data/labshare/Param/internlm2_5-1_8b-chat",
+        # "api_url": "http://10.137.144.97:7030/v1",
+
+        # "model": "/data/labshare/Param/SmolLM2-1.7B-Instruct",
+        # "api_url": "http://10.137.144.97:7031/v1",
 AGENT_CONFIG = {
     "context_agent": {
-        "model": "/data/labshare/Param/MiniCPM5-1B",
-        "api_url": "http://10.137.144.97:7026/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
+        "api_url": "http://10.137.144.97:7023/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "retrieval_agent": {
-        "model": "/data/labshare/Param/MiniCPM5-1B",
-        "api_url": "http://10.137.144.97:7026/v1",
+        "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
+        "api_url": "http://10.137.144.97:7025/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "reasoning_agent": {
-        "model": "/data/labshare/Param/MiniCPM5-1B",
-        "api_url": "http://10.137.144.97:7026/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
+        "api_url": "http://10.137.144.97:7023/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "calculation_agent": {
-        "model": "/data/labshare/Param/MiniCPM5-1B",
-        "api_url": "http://10.137.144.97:7026/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
+        "api_url": "http://10.137.144.97:7023/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "answerability_agent": {
-        "model": "/data/labshare/Param/MiniCPM5-1B",
-        "api_url": "http://10.137.144.97:7026/v1",
+        "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
+        "api_url": "http://10.137.144.97:7025/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
@@ -90,9 +102,9 @@ AGENT_CONFIG = {
 # Edit these defaults directly before running the script.
 CONFIG = {
     "mode": "respond",
-    "plans": "benchmarks/iirc/iirc_plans_llada.json",
-    "responses": "iirc_test/results_1b_llada/subtask_hetro_responses_m_m_m_m_m.json",
-    "output": "iirc_test/results_1b_llada/subtask_hetro_scores_p_p_p_p_p.json",
+    "plans": "benchmarks/iirc/iirc_plans_llama3.json",
+    "responses": "iirc_test/results_1b_llama/subtask_hetro_responses_q_f_q_q_f.json",
+    "output": "iirc_test/results_1b_llama/subtask_hetro_scores_q_f_q_q_f.json",
     "limit": None,
     "force": False,
     "retry_errors": True,

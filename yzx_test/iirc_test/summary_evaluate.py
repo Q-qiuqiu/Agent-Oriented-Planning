@@ -9,11 +9,11 @@ from prompt import summarization_agent_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "responses": "iirc_test/results_3b/subtask_hetro_responses_m_m_m_m_m.json",
+    "responses": "iirc_test/results_1b_llama/subtask_hetro_responses_q_f_q_q_f.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "iirc_test/results_3b/summary_result_m_m_m_m_m.json",
+    "output": "iirc_test/results_1b_llama/summary_result_q_f_q_q_f.json",
     "force": False,
     "summary_api_url": "http://10.137.144.97:7002/v1",
     "summary_api_key": "empty",

@@ -17,7 +17,7 @@ MODEL_CONFIGS = {
         "retrieval_agent": "qwen3-4B",
         "reasoning_agent": "qwen3-4B",
         "calculation_agent": "qwen3-4B",
-        "answerability_agent": "qwen3-4B",
+        "answerability_agent": "minicpm-4B",
     },
     "5 IIRC agents / 5 independent models": {
         "context_agent": "context-model",

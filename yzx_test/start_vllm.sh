@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ============================================================
-# Unified vLLM launcher with per-model Conda environments
+# Unified model-server launcher with per-model Conda environments
 #
 # Usage:
 #   bash start_vllm.sh list
@@ -13,13 +13,15 @@ set -euo pipefail
 # Examples:
 #   bash start_vllm.sh phi4-4b 6
 #   bash start_vllm.sh llama3-8b 0
+#   bash start_vllm.sh llada 4 --background
 #   bash start_vllm.sh qwen3-4b 2 --background
 #   bash start_vllm.sh llama3.2-3b 6 -- --disable-log-requests
 #   bash start_vllm.sh qwen3-30b 0,1,2,3 -- --tensor-parallel-size 4
 #
 # Environment selection:
 #   - hunyuan-1.8b uses Conda environment: vllm012
-#   - minicpm5-1b uses Conda environment: minicpm3
+#   - minicpm3-4b uses Conda environment: minicpm3
+#   - LLaDA/Qwen2.5/InternLM2.5/SmolLM2 models below use Conda environment: base
 #   - Other models use the environment active when this script is invoked.
 #
 # Explicit Python override:
@@ -41,6 +43,7 @@ declare -A MODEL_AUTO_TOOL
 declare -A MODEL_ENFORCE_EAGER
 declare -A MODEL_EXTRA_ARGS
 declare -A MODEL_CONDA_ENV
+declare -A MODEL_RUNNER
 
 register_model() {
     local name="$1"
@@ -63,6 +66,26 @@ register_model() {
     MODEL_AUTO_TOOL["$name"]="$auto_tool"
     MODEL_ENFORCE_EAGER["$name"]="$enforce_eager"
     MODEL_EXTRA_ARGS["$name"]="$extra_args"
+    MODEL_RUNNER["$name"]="vllm"
+}
+
+register_fastdllm_server() {
+    local name="$1"
+    local server_path="$2"
+    local port="$3"
+    local max_len="$4"
+    local extra_args="$5"
+
+    MODEL_PATH["$name"]="$server_path"
+    MODEL_PORT["$name"]="$port"
+    MODEL_TP["$name"]="N/A"
+    MODEL_MAX_LEN["$name"]="$max_len"
+    MODEL_GPU_UTIL["$name"]="N/A"
+    MODEL_TOOL_PARSER["$name"]=""
+    MODEL_AUTO_TOOL["$name"]="false"
+    MODEL_ENFORCE_EAGER["$name"]="false"
+    MODEL_EXTRA_ARGS["$name"]="$extra_args"
+    MODEL_RUNNER["$name"]="fastdllm"
 }
 
 set_model_conda_env() {
@@ -90,6 +113,11 @@ register_model \
     "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct" \
     "7002" "1" "8192" "0.8" \
     "hermes" "true" "false" ""
+register_fastdllm_server \
+    "llada" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7003" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 
 register_model \
     "llama3-3b" \
@@ -158,6 +186,27 @@ register_model \
     "7027" "1" "8192" "0.4" \
     "" "false" "false" \
     "--chat-template /data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B/deepseek_nonthinking.jinja"
+register_model \
+    "qwen2.5-math-1.5b" \
+    "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct" \
+    "7028" "1" "4096" "0.4" \
+    "" "false" "false" ""
+register_model \
+    "qwen2.5-coder-1.5b" \
+    "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct" \
+    "7029" "1" "8192" "0.4" \
+    "" "false" "false" ""
+register_model \
+    "internlm2.5-1.8b" \
+    "/data/labshare/Param/internlm2_5-1_8b-chat" \
+    "7030" "1" "8192" "0.4" \
+    "" "false" "false" \
+    "--trust-remote-code"
+register_model \
+    "smollm2-1.7b" \
+    "/data/labshare/Param/SmolLM2-1.7B-Instruct" \
+    "7031" "1" "8192" "0.4" \
+    "" "false" "false" ""
 # ============================================================
 # Per-model Conda environment mapping
 #
@@ -167,6 +216,11 @@ register_model \
 
 set_model_conda_env "hunyuan-1.8b" "vllm012"
 set_model_conda_env "minicpm3-4b" "minicpm3"
+set_model_conda_env "llada" "base"
+set_model_conda_env "qwen2.5-math-1.5b" "base"
+set_model_conda_env "qwen2.5-coder-1.5b" "base"
+set_model_conda_env "internlm2.5-1.8b" "base"
+set_model_conda_env "smollm2-1.7b" "base"
 
 usage() {
     cat <<'USAGE'
@@ -177,6 +231,7 @@ Usage:
 Examples:
   bash start_vllm.sh phi4-4b 6
   bash start_vllm.sh llama3-8b 0
+  bash start_vllm.sh llada 4 --background
   bash start_vllm.sh qwen3-4b 2 --background
   bash start_vllm.sh llama3.2-3b 6 -- --disable-log-requests
   bash start_vllm.sh qwen3-30b 0,1,2,3 -- --tensor-parallel-size 4
@@ -275,6 +330,8 @@ activate_conda_env() {
 }
 
 resolve_python_executable() {
+    local target_conda_env="${1:-}"
+
     if [[ -n "$PYTHON_BIN_OVERRIDE" ]]; then
         if [[ "$PYTHON_BIN_OVERRIDE" == */* ]]; then
             if [[ ! -x "$PYTHON_BIN_OVERRIDE" ]]; then
@@ -298,6 +355,22 @@ resolve_python_executable() {
     fi
 
     local selected_python
+
+    # A virtual environment can remain at the front of PATH even when Conda
+    # reports the requested environment as active. For explicitly mapped
+    # models, use that Conda environment's Python directly.
+    if [[ -n "$target_conda_env" ]]; then
+        selected_python="${CONDA_PREFIX:-}/bin/python"
+
+        if [[ -z "${CONDA_PREFIX:-}" || ! -x "$selected_python" ]]; then
+            echo "Error: no usable Python executable was found for Conda environment: $target_conda_env" >&2
+            exit 1
+        fi
+
+        printf '%s\n' "$selected_python"
+        return 0
+    fi
+
     selected_python="$(command -v python || true)"
 
     if [[ -z "$selected_python" || ! -x "$selected_python" ]]; then
@@ -372,6 +445,7 @@ AUTO_TOOL="${MODEL_AUTO_TOOL[$MODEL_NAME]}"
 ENFORCE_EAGER="${MODEL_ENFORCE_EAGER[$MODEL_NAME]}"
 CONFIG_EXTRA_ARGS="${MODEL_EXTRA_ARGS[$MODEL_NAME]}"
 TARGET_CONDA_ENV="${MODEL_CONDA_ENV[$MODEL_NAME]-}"
+RUNNER="${MODEL_RUNNER[$MODEL_NAME]}"
 
 if [[ ! -e "$MODEL" ]]; then
     echo "Warning: model path does not exist: $MODEL" >&2
@@ -383,33 +457,42 @@ if [[ -z "$PYTHON_BIN_OVERRIDE" && -n "$TARGET_CONDA_ENV" ]]; then
     activate_conda_env "$TARGET_CONDA_ENV"
 fi
 
-PYTHON_EXECUTABLE="$(resolve_python_executable)"
+PYTHON_EXECUTABLE="$(resolve_python_executable "$TARGET_CONDA_ENV")"
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
 
-CMD=(
-    "$PYTHON_EXECUTABLE"
-    -m "$VLLM_MODULE"
-    --model "$MODEL"
-    --tensor-parallel-size "$TP"
-    --max-model-len "$MAX_LEN"
-    --gpu-memory-utilization "$GPU_UTIL"
-    --port "$PORT"
-)
+if [[ "$RUNNER" == "fastdllm" ]]; then
+    CMD=(
+        env
+        "FASTDLLM_PORT=$PORT"
+        "$PYTHON_EXECUTABLE"
+        "$MODEL"
+    )
+else
+    CMD=(
+        "$PYTHON_EXECUTABLE"
+        -m "$VLLM_MODULE"
+        --model "$MODEL"
+        --tensor-parallel-size "$TP"
+        --max-model-len "$MAX_LEN"
+        --gpu-memory-utilization "$GPU_UTIL"
+        --port "$PORT"
+    )
 
-if [[ -n "$TOOL_PARSER" ]]; then
-    CMD+=(--tool-call-parser "$TOOL_PARSER")
+    if [[ -n "$TOOL_PARSER" ]]; then
+        CMD+=(--tool-call-parser "$TOOL_PARSER")
 
-    if [[ "$AUTO_TOOL" == "true" ]]; then
-        CMD+=(--enable-auto-tool-choice)
+        if [[ "$AUTO_TOOL" == "true" ]]; then
+            CMD+=(--enable-auto-tool-choice)
+        fi
+    elif [[ "$AUTO_TOOL" == "true" ]]; then
+        echo "Error: auto tool choice is enabled for '$MODEL_NAME'," >&2
+        echo "but no tool-call parser is configured." >&2
+        exit 1
     fi
-elif [[ "$AUTO_TOOL" == "true" ]]; then
-    echo "Error: auto tool choice is enabled for '$MODEL_NAME'," >&2
-    echo "but no tool-call parser is configured." >&2
-    exit 1
-fi
 
-if [[ "$ENFORCE_EAGER" == "true" ]]; then
-    CMD+=(--enforce-eager)
+    if [[ "$ENFORCE_EAGER" == "true" ]]; then
+        CMD+=(--enforce-eager)
+    fi
 fi
 
 shell_split_append "$CONFIG_EXTRA_ARGS" CMD
@@ -422,6 +505,7 @@ PYTHON_VERSION="$("$PYTHON_EXECUTABLE" -V 2>&1)"
 echo "============================================================"
 echo "Model name:           $MODEL_NAME"
 echo "Model path:           $MODEL"
+echo "Runner:               $RUNNER"
 echo "Requested Conda env:  ${TARGET_CONDA_ENV:-current}"
 echo "Active Conda env:     $ACTIVE_CONDA_ENV"
 echo "Conda prefix:         $ACTIVE_CONDA_PREFIX"

@@ -118,6 +118,36 @@ def build_prompt(agent_name, query, task, history):
     raise ValueError(f"Unknown agent: {agent_name}")
 
 
+def normalize_search_query(raw_output):
+    query = raw_output.strip()
+    fenced = re.fullmatch(r"```(?:text)?\s*(.*?)\s*```", query, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        query = fenced.group(1).strip()
+
+    query = re.sub(
+        r"^(?:search\s+query|query)\s*:\s*",
+        "",
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    try:
+        decoded = json.loads(query)
+    except (json.JSONDecodeError, TypeError):
+        decoded = None
+    if isinstance(decoded, str):
+        query = decoded.strip()
+
+    quote_pairs = {'"': '"', "'": "'", "`": "`", "“": "”", "‘": "’"}
+    while len(query) >= 2 and quote_pairs.get(query[0]) == query[-1]:
+        query = query[1:-1].strip()
+
+    if not query:
+        raise ValueError("search agent returned an empty search query")
+    return query
+
+
 def ddgs_search_snippets(
     search_query,
     top_k,
@@ -285,7 +315,7 @@ def format_for_scorer(
         return scorer_response, {"rewritten_response": rewritten}
 
     if agent_name == "search_agent":
-        search_query = raw_output.strip()
+        search_query = normalize_search_query(raw_output)
         snippets = search_snippets(
             search_query,
             search_backend,

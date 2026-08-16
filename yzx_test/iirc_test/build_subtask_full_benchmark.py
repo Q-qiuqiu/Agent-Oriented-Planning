@@ -17,6 +17,7 @@ AGENTS = [
     "calculation_agent",
     "answerability_agent",
 ]
+FULL_PROMPT_VERSION = "iirc_full_shared_planner_prompt_v2"
 
 AGENT_ALIASES = {
     "retriev_agent": "retrieval_agent",
@@ -38,44 +39,29 @@ STANDARD_OUTPUT_BLOCK = """Output only valid JSON in this format:
   }
 ]"""
 
-FULL_OUTPUT_BLOCK = """Produce exactly two sections in the following order.
-The first section must expose the planning rationale, and the second section
-must contain the executable plan.
+FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
+and JSON plan that you would produce under the original instructions. The only
+additional requirement is to output the planning reasoning before that JSON.
 
 PLANNING_REASONING
-Write exactly six numbered sentences, one sentence for each item below. Each
-sentence must contain at most 35 words, and the whole section must contain at
-most 210 words. Never repeat a fact, evidence target, operation, or sentence.
-1. Useful information already present in the initial passage.
-2. Missing evidence and the linked articles that may contain it.
-3. Evidence tasks that can run independently in the first batch.
-4. Later tasks and their dependencies on earlier results.
-5. Why the selected agent roles are appropriate.
-6. Why the plan is complete without unnecessary or duplicate work.
-
-Do not put JSON, square brackets, braces, or Markdown code fences in this
-section. After sentence 6, immediately write END_PLANNING_REASONING and then
-the PLAN_JSON section. Do not continue or expand the reasoning.
+Explain the reasoning that led to the plan. This is an additional explanation,
+not a different planning task. Do not solve the subtasks in this section and do
+not introduce any agent-selection, evidence-gathering, or decomposition rules
+beyond the original instructions. Do not put JSON or Markdown code fences in
+this section.
 END_PLANNING_REASONING
 
 PLAN_JSON
 [
   {
     "id": 1,
-    "task": "A detailed, self-contained, executable subtask that preserves all relevant entities, constraints, and expected evidence.",
+    "task": "detailed executable subtask",
     "agent": "context_agent",
-    "reason": "A detailed explanation of why this role is the best fit and how its output supports the final answer.",
+    "reason": "why this agent is suitable",
     "dep": []
   }
 ]
 END_PLAN_JSON
-
-The PLAN_JSON section must contain one valid JSON array using the original
-schema. The "agent" value must exactly match one of "context_agent",
-"retrieval_agent", "reasoning_agent", "calculation_agent", or
-"answerability_agent". Make every task and reason detailed and self-contained.
-Do not add comments, trailing commas, extra fields, or prose inside the JSON
-array.
 """
 
 if STANDARD_OUTPUT_BLOCK not in planner_prompt:
@@ -90,12 +76,12 @@ FULL_PLANNER_PROMPT = planner_prompt.replace(
 # Edit these defaults directly before running the script.
 CONFIG = {
     "input": "benchmarks/iirc/iirc_dev_flat.json",
-    "plans_output": "benchmarks/iirc/iirc_plans_full_llada.json",
-    "benchmark_output": "benchmarks/iirc/iirc_subtask_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7004/v1",
+    "plans_output": "benchmarks/iirc/iirc_plans_full_llama3.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_full_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
-    "planner_model": "/data/labshare/Param/llada",
-    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,
@@ -263,6 +249,7 @@ def build_plans(queries, config):
         for index, item in existing_by_index.items()
         if item.get("error") is None
         and item.get("plan")
+        and item.get("planner_prompt_version") == FULL_PROMPT_VERSION
         and (
             not config["retry_missing_reasoning"]
             or item.get("planning_reasoning")
@@ -272,6 +259,7 @@ def build_plans(queries, config):
         print(
             f"resume | loaded={len(existing_by_index)} "
             f"| completed={len(done)} "
+            f"| prompt_version={FULL_PROMPT_VERSION} "
             f"| retry_missing_reasoning="
             f"{config['retry_missing_reasoning']}",
             flush=True,
@@ -298,6 +286,7 @@ def build_plans(queries, config):
             "gold_context": row.get("gold_context") or [],
             "planner_model": config["planner_model"],
             "planner_mode": "reasoning_then_json",
+            "planner_prompt_version": FULL_PROMPT_VERSION,
         }
         try:
             raw_output = request_completion(

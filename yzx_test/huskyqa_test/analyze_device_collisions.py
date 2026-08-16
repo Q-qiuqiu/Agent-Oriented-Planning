@@ -7,17 +7,17 @@ from pathlib import Path
 # Edit these defaults directly before running the script.
 CONFIG = {
     "plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
-    "device_counts": [2, 3],
+    "device_counts": [1, 2, 3],
     "summary_output": "huskyqa_test/results/device_collision_summary_lru.json",
 }
 
 MODEL_CONFIGS = {
     "4 agents / 3 models": {
-        "code_agent": "gemma3-4B",
-        "math_agent": "qwen3-4B",
-        "search_agent": "gemma3-4B",
-        "commonsense_agent": "llama3-3B",
-    },
+            "code_agent": "qwen2.5-coder-1.5b",
+            "math_agent": "qwen3-1.7b",
+            "search_agent": "lfm2.5-1.2b",
+            "commonsense_agent": "minicpm5-1b",
+        },
     "4 agents / 4 independent models": {
         "code_agent": "code-model",
         "math_agent": "math-model",

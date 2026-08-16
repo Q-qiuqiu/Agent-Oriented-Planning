@@ -12,11 +12,11 @@ from prompt import evaluate_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "input": "iirc_test/results_3b/summary_result_m_m_m_m_m.json",
+    "input": "iirc_test/results_1b_llama/summary_result_q_f_q_q_f.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "iirc_test/results_3b/summary_score_m_m_m_m_m.json",
+    "output": "iirc_test/results_1b_llama/summary_score_q_f_q_q_f.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",

@@ -48,17 +48,29 @@ from prompt import scorer_prompt
 
         # "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
         # "api_url": "http://10.137.144.97:7027/v1",
+
+        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct",
+        # "api_url": "http://10.137.144.97:7028/v1",
+
+        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        # "api_url": "http://10.137.144.97:7029/v1",
+
+        # "model": "/data/labshare/Param/internlm2_5-1_8b-chat",
+        # "api_url": "http://10.137.144.97:7030/v1",
+
+        # "model": "/data/labshare/Param/SmolLM2-1.7B-Instruct",
+        # "api_url": "http://10.137.144.97:7031/v1",
 AGENT_CONFIG = {
     "code_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        "api_url": "http://10.137.144.97:7029/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
     },
     "math_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
+        "api_url": "http://10.137.144.97:7023/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
@@ -71,8 +83,8 @@ AGENT_CONFIG = {
         "timeout": 120,
     },
     "commonsense_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
+        "model": "/data/labshare/Param/MiniCPM5-1B",
+        "api_url": "http://10.137.144.97:7026/v1",
         "api_key": "empty",
         "temperature": 0.0,
         "timeout": 120,
@@ -83,14 +95,15 @@ AGENT_CONFIG = {
 # Edit these defaults directly before running the script.
 CONFIG = {
     "mode": "respond",
-    "plans": "benchmarks/huskyqa/huskyqa_plans_llada.json",
-    "responses": "huskyqa_test/results_1b_llada/subtask_hetro_responses_d_d_d_d.json",
-    "output": "huskyqa_test/results_1b_llada/subtask_hetro_scores_d_d_d_d.json",
+    "plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+    "responses": "huskyqa_test/results_1b_llama/subtask_hetro_responses_qc_q_s_m.json",
+    "output": "huskyqa_test/results_1b_llama/subtask_hetro_scores_qc_q_s_m.json",
     "limit": None,
     "force": False,
     "retry_errors": True,
+    "retry_empty_search_results": True,
     "search_backend": "cache_fallback",
-    "ddgs_proxy": "http://10.134.110.145:7890",
+    "ddgs_proxy": "http://10.134.110.145:10808",
     "ddgs_timeout": 30,
     "ddgs_retries": 3,
     "ddgs_region": "us-en",
@@ -102,6 +115,7 @@ CONFIG = {
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",
     "judge_model": "/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507",
+    #"judge_model": "/home/yzx/models/Qwen3-30B-A3B-Instruct-2507",
     "judge_temperature": 0.0,
     "judge_timeout": 120,
 }
@@ -247,7 +261,20 @@ def base_response_record(plan_record):
     }
 
 
-def execute_plans(plans, responses_path, limit=None, force=False, retry_errors=True):
+def has_empty_search_results(step, previous):
+    agent_name = previous.get("agent") or step.get("agent")
+    snippets = (previous.get("metadata") or {}).get("search_snippets")
+    return agent_name == "search_agent" and snippets == []
+
+
+def execute_plans(
+    plans,
+    responses_path,
+    limit=None,
+    force=False,
+    retry_errors=True,
+    retry_empty_search_results=True,
+):
     existing = [] if force else load_json(responses_path, []) or []
     records_by_index = {record.get("source_index"): record for record in existing}
     selected = plans[:limit] if limit else plans
@@ -270,10 +297,27 @@ def execute_plans(plans, responses_path, limit=None, force=False, retry_errors=T
         for step in plan_record["plan"]:
             step_id = normalize_step_id(step.get("id"))
             previous = step_records.get(step_id)
-            if previous and previous.get("error") is None and previous.get("response") and not force:
+            retry_empty_search = (
+                previous
+                and retry_empty_search_results
+                and has_empty_search_results(step, previous)
+            )
+            if (
+                previous
+                and previous.get("error") is None
+                and previous.get("response")
+                and not force
+                and not retry_empty_search
+            ):
                 continue
             if previous and previous.get("error") and not retry_errors and not force:
                 continue
+            if retry_empty_search and not force:
+                print(
+                    f"retry source={source_index} | step={step.get('id')} "
+                    "| reason=empty_search_snippets",
+                    flush=True,
+                )
 
             started = time.time()
             try:
@@ -441,6 +485,7 @@ def main():
             args.limit,
             args.force,
             CONFIG["retry_errors"],
+            CONFIG["retry_empty_search_results"],
         )
         print(f"Saved heterogeneous subtask responses to {args.responses}", flush=True)
     else:

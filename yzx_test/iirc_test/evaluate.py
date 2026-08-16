@@ -13,7 +13,7 @@ CONFIG = {
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "iirc_test/results/plan_evaluate.json",
+    "output": "iirc_test/results/plan_evaluate_llama3.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",

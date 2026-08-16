@@ -11,6 +11,7 @@ from prompt import planner_prompt
 
 
 AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
+FULL_PROMPT_VERSION = "huskyqa_full_shared_planner_prompt_v2"
 
 STANDARD_OUTPUT_BLOCK = """Output only valid JSON in this format:
 [
@@ -23,40 +24,28 @@ STANDARD_OUTPUT_BLOCK = """Output only valid JSON in this format:
   }
 ]"""
 
-FULL_OUTPUT_BLOCK = """Produce exactly two sections in the following order.
-The first section must expose the planning rationale, and the second section
-must contain the executable plan.
+FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
+and JSON plan that you would produce under the original instructions. The only
+additional requirement is to output the planning reasoning before that JSON.
 
 PLANNING_REASONING
-Explain in detailed prose:
-1. which facts, entities, numbers, constraints, and dates must be preserved;
-2. which operations or external evidence are needed to answer the query;
-3. which subtasks can run independently in the first batch;
-4. which later subtasks depend on earlier results;
-5. why every selected agent role is appropriate; and
-6. why the plan is complete without unnecessary or duplicate work.
-
-Make this reasoning section roughly as detailed as the JSON plan. Do not put
-JSON, square brackets, braces, or Markdown code fences in this section.
+Explain the reasoning that led to the plan. This is an additional explanation,
+not a different planning task. Do not solve the subtasks in this section and do
+not introduce any agent-selection or decomposition rules beyond the original
+instructions. Do not put JSON or Markdown code fences in this section.
 END_PLANNING_REASONING
 
 PLAN_JSON
 [
   {
     "id": 1,
-    "task": "A detailed, self-contained, executable subtask that preserves all relevant entities, numbers, constraints, and expected output.",
+    "task": "subtask description",
     "agent": "math_agent",
-    "reason": "A detailed explanation of why this role is the best fit and how its output supports the final answer.",
+    "reason": "why this agent is suitable",
     "dep": []
   }
 ]
 END_PLAN_JSON
-
-The PLAN_JSON section must contain one valid JSON array using the original
-schema. The "agent" value must exactly match one of "code_agent",
-"math_agent", "search_agent", or "commonsense_agent". Make every task and
-reason detailed and self-contained. Do not add comments, trailing commas,
-extra fields, or prose inside the JSON array.
 """
 
 if STANDARD_OUTPUT_BLOCK not in planner_prompt:
@@ -216,6 +205,7 @@ def build_plans(queries, config):
         for index, item in existing_by_index.items()
         if item.get("error") is None
         and item.get("plan")
+        and item.get("planner_prompt_version") == FULL_PROMPT_VERSION
         and (
             not config["retry_missing_reasoning"]
             or item.get("planning_reasoning")
@@ -225,6 +215,7 @@ def build_plans(queries, config):
         print(
             f"resume | loaded={len(existing_by_index)} "
             f"| completed={len(done)} "
+            f"| prompt_version={FULL_PROMPT_VERSION} "
             f"| retry_missing_reasoning="
             f"{config['retry_missing_reasoning']}",
             flush=True,
@@ -243,6 +234,7 @@ def build_plans(queries, config):
             "answer": row.get("answer"),
             "planner_model": config["planner_model"],
             "planner_mode": "reasoning_then_json",
+            "planner_prompt_version": FULL_PROMPT_VERSION,
         }
         try:
             raw_output = request_completion(
