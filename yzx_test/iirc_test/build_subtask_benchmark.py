@@ -30,8 +30,8 @@ AGENT_ALIASES = {
 # Edit these defaults directly when running from this file.
 CONFIG = {
     "input": "benchmarks/iirc/iirc_dev_flat.json",
-    "plans_output": "benchmarks/iirc/iirc_plans_llada.json",
-    "benchmark_output": "benchmarks/iirc/iirc_subtask_llada.json",
+    "plans_output": "benchmarks/iirc/iirc_plans_llada_now.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_llada_now.json",
     "planner_api_url": "http://10.137.144.97:7004/v1",
     "planner_api_key": "empty",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",

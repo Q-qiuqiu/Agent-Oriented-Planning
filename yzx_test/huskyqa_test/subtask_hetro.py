@@ -11,93 +11,181 @@ from evaluate_agent_fit import (
 )
 from openai_compat import run_chat_completion
 from prompt import scorer_prompt
-################################ 3-4b model ###################################
-        # "model": "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
-        # "api_url": "http://10.137.144.97:7011/v1",
 
-        # "model": "/data/labshare/Param/gemma-3-4b-it",
-        # "api_url": "http://10.137.144.97:7012/v1",
 
-        # "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-        # "api_url": "http://10.137.144.97:7013/v1",
+# Only edit these values when switching heterogeneous model combinations.
+# Assignment order: code_agent, math_agent, search_agent, commonsense_agent.
+# 1b aliases: l=llama, g=gemma, q=qwen3, h=hunyuan, f=lfm, m=minicpm,
+#             d=deepseek, qm=qwen-math, qc=qwen-coder, i=internlm, s=smollm.
+# 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
+MODEL_SIZE = "1b"
+AGENT_ASSIGNMENT = "qc_q_d_m"
+PLAN_VARIANT = "llada_now"
 
-        # "model": "/data/labshare/Param/Phi-4-mini-instruct",
-        # "api_url": "http://10.137.144.97:7014/v1",
+AGENT_ORDER = (
+    "code_agent",
+    "math_agent",
+    "search_agent",
+    "commonsense_agent",
+)
 
-        # "model": "/data/labshare/Param/MiniCPM3-4B",
-        # "api_url": "http://10.137.144.97:7015/v1",
-
-################################ 1-2b model ###################################
-        # "model": "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct",
-        # "api_url": "http://10.137.144.97:7021/v1",
-
-        # "model": "/data/labshare/Param/gemma-3-1b-it",
-        # "api_url": "http://10.137.144.97:7022/v1",
-
-        # "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
-        # "api_url": "http://10.137.144.97:7023/v1",
-
-        # "model": "/data/labshare/Param/Hunyuan-1.8B-Instruct",
-        # "api_url": "http://10.137.144.97:7024/v1",
-
-        # "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
-        # "api_url": "http://10.137.144.97:7025/v1",
-
-        # "model": "/data/labshare/Param/MiniCPM5-1B",
-        # "api_url": "http://10.137.144.97:7026/v1",
-
-        # "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        # "api_url": "http://10.137.144.97:7027/v1",
-
-        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct",
-        # "api_url": "http://10.137.144.97:7028/v1",
-
-        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
-        # "api_url": "http://10.137.144.97:7029/v1",
-
-        # "model": "/data/labshare/Param/internlm2_5-1_8b-chat",
-        # "api_url": "http://10.137.144.97:7030/v1",
-
-        # "model": "/data/labshare/Param/SmolLM2-1.7B-Instruct",
-        # "api_url": "http://10.137.144.97:7031/v1",
-AGENT_CONFIG = {
-    "code_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
-        "api_url": "http://10.137.144.97:7029/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
+# Aliases are scoped by MODEL_SIZE, so the same short name can represent the
+# corresponding model family in the 1B and 3B pools.
+MODEL_PRESETS = {
+    "1b": {
+        "l": (
+            "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct",
+            "http://10.137.144.97:7021/v1",
+        ),
+        "g": (
+            "/data/labshare/Param/gemma-3-1b-it",
+            "http://10.137.144.97:7022/v1",
+        ),
+        "q": (
+            "/data/labshare/Param/Qwen/Qwen3-1.7B",
+            "http://10.137.144.97:7023/v1",
+        ),
+        "h": (
+            "/data/labshare/Param/Hunyuan-1.8B-Instruct",
+            "http://10.137.144.97:7024/v1",
+        ),
+        "f": (
+            "/data/labshare/Param/LFM2.5-1.2B-Instruct",
+            "http://10.137.144.97:7025/v1",
+        ),
+        "m": (
+            "/data/labshare/Param/MiniCPM5-1B",
+            "http://10.137.144.97:7026/v1",
+        ),
+        "d": (
+            "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+            "http://10.137.144.97:7027/v1",
+        ),
+        "qm": (
+            "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct",
+            "http://10.137.144.97:7028/v1",
+        ),
+        "qc": (
+            "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
+            "http://10.137.144.97:7029/v1",
+        ),
+        "i": (
+            "/data/labshare/Param/internlm2_5-1_8b-chat",
+            "http://10.137.144.97:7030/v1",
+        ),
+        "s": (
+            "/data/labshare/Param/SmolLM2-1.7B-Instruct",
+            "http://10.137.144.97:7031/v1",
+        ),
     },
-    "math_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
-        "api_url": "http://10.137.144.97:7023/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "search_agent": {
-        "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        "api_url": "http://10.137.144.97:7027/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "commonsense_agent": {
-        "model": "/data/labshare/Param/MiniCPM5-1B",
-        "api_url": "http://10.137.144.97:7026/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
+    "3b": {
+        "l": (
+            "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
+            "http://10.137.144.97:7011/v1",
+        ),
+        "g": (
+            "/data/labshare/Param/gemma-3-4b-it",
+            "http://10.137.144.97:7012/v1",
+        ),
+        "q": (
+            "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+            "http://10.137.144.97:7013/v1",
+        ),
+        "p": (
+            "/data/labshare/Param/Phi-4-mini-instruct",
+            "http://10.137.144.97:7014/v1",
+        ),
+        "m": (
+            "/data/labshare/Param/MiniCPM3-4B",
+            "http://10.137.144.97:7015/v1",
+        ),
     },
 }
 
 
-# Edit these defaults directly before running the script.
+# Initial mapping based on the cache files currently under huskyqa_test/cache.
+# Verify shared family caches when adding results from a new model variant.
+SEARCH_CACHE_BY_MODEL = {
+    "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct": "cache/search_cache_llama3.json",
+    "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct": "cache/search_cache_llama3.json",
+    "/data/labshare/Param/gemma-3-4b-it": "cache/search_cache_gemma.json",
+    "/data/labshare/Param/gemma-3-1b-it": "cache/search_cache_gemma.json",
+    "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507": "cache/search_cache_qwen.json",
+    "/data/labshare/Param/Qwen/Qwen3-1.7B": "cache/search_cache_qwen.json",
+    "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct": "cache/search_cache_qwen.json",
+    "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct": "cache/search_cache_qwen.json",
+    "/data/labshare/Param/Phi-4-mini-instruct": "cache/search_cache_phi4.json",
+    "/data/labshare/Param/MiniCPM3-4B": "cache/search_cache_minicpm.json",
+    "/data/labshare/Param/MiniCPM5-1B": "cache/search_cache_minicpm.json",
+    "/data/labshare/Param/Hunyuan-1.8B-Instruct": "cache/search_cache_hunyuan.json",
+    "/data/labshare/Param/LFM2.5-1.2B-Instruct": "cache/search_cache_lfm.json",
+    "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B": "cache/search_cache_deepseek.json",
+    "/data/labshare/Param/internlm2_5-1_8b-chat": "cache/search_cache_internlm.json",
+    "/data/labshare/Param/SmolLM2-1.7B-Instruct": "cache/search_cache_smollm.json",
+}
+
+
+def build_agent_config(model_size, assignment):
+    try:
+        model_pool = MODEL_PRESETS[model_size]
+    except KeyError as exc:
+        valid_sizes = ", ".join(sorted(MODEL_PRESETS))
+        raise ValueError(
+            f"Unknown MODEL_SIZE {model_size!r}; expected one of: {valid_sizes}"
+        ) from exc
+
+    aliases = assignment.split("_")
+    if len(aliases) != len(AGENT_ORDER):
+        raise ValueError(
+            f"AGENT_ASSIGNMENT {assignment!r} must contain exactly four aliases "
+            "in code_math_search_commonsense order"
+        )
+
+    unknown_aliases = sorted(set(aliases) - set(model_pool))
+    if unknown_aliases:
+        valid_aliases = ", ".join(sorted(model_pool))
+        raise ValueError(
+            f"Unknown {model_size} model aliases {unknown_aliases}; "
+            f"expected aliases from: {valid_aliases}"
+        )
+
+    config = {}
+    for agent_name, alias in zip(AGENT_ORDER, aliases):
+        model, api_url = model_pool[alias]
+        config[agent_name] = {
+            "alias": alias,
+            "model": model,
+            "api_url": api_url,
+            "api_key": "empty",
+            "temperature": 0.0,
+            "timeout": 120,
+        }
+    return config
+
+
+AGENT_CONFIG = build_agent_config(MODEL_SIZE, AGENT_ASSIGNMENT)
+
+
+def search_cache_path_for_agent_config():
+    model = AGENT_CONFIG["search_agent"]["model"].rstrip("/")
+    try:
+        return SEARCH_CACHE_BY_MODEL[model]
+    except KeyError as exc:
+        known_models = "\n  - ".join(sorted(SEARCH_CACHE_BY_MODEL))
+        raise ValueError(
+            f"No search cache mapping for search_agent model {model!r}. "
+            f"Add it to SEARCH_CACHE_BY_MODEL. Known models:\n  - {known_models}"
+        ) from exc
+
+
+# Other experiment defaults. Model assignments and result names are derived
+# from MODEL_SIZE, AGENT_ASSIGNMENT, and PLAN_VARIANT above.
+RESULTS_DIR = f"huskyqa_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 CONFIG = {
     "mode": "respond",
-    "plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
-    "responses": "huskyqa_test/results_1b_llama/subtask_hetro_responses_qc_q_s_m.json",
-    "output": "huskyqa_test/results_1b_llama/subtask_hetro_scores_qc_q_s_m.json",
+    "plans": f"benchmarks/huskyqa/huskyqa_plans_{PLAN_VARIANT}.json",
+    "responses": f"{RESULTS_DIR}/subtask_hetro_responses_{AGENT_ASSIGNMENT}.json",
+    "output": f"{RESULTS_DIR}/subtask_hetro_scores_{AGENT_ASSIGNMENT}.json",
     "limit": None,
     "force": False,
     "retry_errors": True,
@@ -111,7 +199,7 @@ CONFIG = {
     "ddgs_results_per_backend": 10,
     "ddgs_max_workers": 3,
     "search_top_k": 10,
-    "search_cache_path": "cache/search_cache_deepseek.json",
+    "search_cache_path": search_cache_path_for_agent_config(),
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",
     "judge_model": "/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507",
@@ -462,6 +550,24 @@ def judge_rows(response_records, output_path, force=False):
     return result
 
 
+def print_run_config(args):
+    print(
+        f"Model assignment | size={MODEL_SIZE} | name={AGENT_ASSIGNMENT} "
+        f"| order={','.join(AGENT_ORDER)}",
+        flush=True,
+    )
+    for agent_name in AGENT_ORDER:
+        agent_config = AGENT_CONFIG[agent_name]
+        print(
+            f"  {agent_name}: alias={agent_config['alias']} "
+            f"| model={agent_config['model']} | api={agent_config['api_url']}",
+            flush=True,
+        )
+    print(f"Plans: {args.plans}", flush=True)
+    print(f"Responses: {args.responses}", flush=True)
+    print(f"Scores: {args.output}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Execute planner-selected subtasks with heterogeneous agent APIs, then judge offline results."
@@ -473,12 +579,19 @@ def main():
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
+    print_run_config(args)
 
     plans = load_json(args.plans, []) or []
     if not plans:
         raise ValueError(f"No planner records found in {args.plans}")
 
     if args.mode in {"respond", "all"}:
+        print(
+            "Search cache mapping "
+            f"| model={AGENT_CONFIG['search_agent']['model']} "
+            f"| path={CONFIG['search_cache_path']}",
+            flush=True,
+        )
         response_records = execute_plans(
             plans,
             args.responses,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Edit these defaults directly before running the script.
 CONFIG = {
-    "huskyqa_plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+    "huskyqa_plans": "benchmarks/huskyqa/huskyqa_plans_llada_now.json",
     "iirc_plans": "benchmarks/iirc/iirc_plans_llama3.json",
     # Each round appends this many HuskyQA queries, then this many IIRC queries.
     # For example, 1:5 produces H, I, I, I, I, I, H, ...

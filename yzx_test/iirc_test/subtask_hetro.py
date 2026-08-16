@@ -11,100 +11,158 @@ from evaluate_agent_fit import (
 )
 from openai_compat import run_chat_completion
 from prompt import scorer_prompt
-################################ 3-4b model ###################################
-        # "model": "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
-        # "api_url": "http://10.137.144.97:7011/v1",
 
-        # "model": "/data/labshare/Param/gemma-3-4b-it",
-        # "api_url": "http://10.137.144.97:7012/v1",
 
-        # "model": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-        # "api_url": "http://10.137.144.97:7013/v1",
+# Only edit these values when switching heterogeneous model combinations.
+# Assignment order: context, retrieval, reasoning, calculation, answerability.
+# 1b aliases: l=llama, g=gemma, q=qwen3, h=hunyuan, f=lfm, m=minicpm,
+#             d=deepseek, qm=qwen-math, qc=qwen-coder, i=internlm, s=smollm.
+# 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
+MODEL_SIZE = "1b"
+AGENT_ASSIGNMENT = "q_f_q_q_f"
+PLAN_VARIANT = "llama"
 
-        # "model": "/data/labshare/Param/Phi-4-mini-instruct",
-        # "api_url": "http://10.137.144.97:7014/v1",
+AGENT_ORDER = (
+    "context_agent",
+    "retrieval_agent",
+    "reasoning_agent",
+    "calculation_agent",
+    "answerability_agent",
+)
 
-        # "model": "/data/labshare/Param/MiniCPM3-4B",
-        # "api_url": "http://10.137.144.97:7015/v1",
-
-################################ 1-2b model ###################################
-        # "model": "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct",
-        # "api_url": "http://10.137.144.97:7021/v1",
-
-        # "model": "/data/labshare/Param/gemma-3-1b-it",
-        # "api_url": "http://10.137.144.97:7022/v1",
-
-        # "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
-        # "api_url": "http://10.137.144.97:7023/v1",
-
-        # "model": "/data/labshare/Param/Hunyuan-1.8B-Instruct",
-        # "api_url": "http://10.137.144.97:7024/v1",
-
-        # "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
-        # "api_url": "http://10.137.144.97:7025/v1",
-
-        # "model": "/data/labshare/Param/MiniCPM5-1B",
-        # "api_url": "http://10.137.144.97:7026/v1",
-
-        # "model": "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
-        # "api_url": "http://10.137.144.97:7027/v1",
-        
-        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct",
-        # "api_url": "http://10.137.144.97:7028/v1",
-
-        # "model": "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
-        # "api_url": "http://10.137.144.97:7029/v1",
-
-        # "model": "/data/labshare/Param/internlm2_5-1_8b-chat",
-        # "api_url": "http://10.137.144.97:7030/v1",
-
-        # "model": "/data/labshare/Param/SmolLM2-1.7B-Instruct",
-        # "api_url": "http://10.137.144.97:7031/v1",
-AGENT_CONFIG = {
-    "context_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
-        "api_url": "http://10.137.144.97:7023/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
+MODEL_PRESETS = {
+    "1b": {
+        "l": (
+            "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct",
+            "http://10.137.144.97:7021/v1",
+        ),
+        "g": (
+            "/data/labshare/Param/gemma-3-1b-it",
+            "http://10.137.144.97:7022/v1",
+        ),
+        "q": (
+            "/data/labshare/Param/Qwen/Qwen3-1.7B",
+            "http://10.137.144.97:7023/v1",
+        ),
+        "h": (
+            "/data/labshare/Param/Hunyuan-1.8B-Instruct",
+            "http://10.137.144.97:7024/v1",
+        ),
+        "f": (
+            "/data/labshare/Param/LFM2.5-1.2B-Instruct",
+            "http://10.137.144.97:7025/v1",
+        ),
+        "m": (
+            "/data/labshare/Param/MiniCPM5-1B",
+            "http://10.137.144.97:7026/v1",
+        ),
+        "d": (
+            "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B",
+            "http://10.137.144.97:7027/v1",
+        ),
+        "qm": (
+            "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct",
+            "http://10.137.144.97:7028/v1",
+        ),
+        "qc": (
+            "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct",
+            "http://10.137.144.97:7029/v1",
+        ),
+        "i": (
+            "/data/labshare/Param/internlm2_5-1_8b-chat",
+            "http://10.137.144.97:7030/v1",
+        ),
+        "s": (
+            "/data/labshare/Param/SmolLM2-1.7B-Instruct",
+            "http://10.137.144.97:7031/v1",
+        ),
     },
-    "retrieval_agent": {
-        "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
-        "api_url": "http://10.137.144.97:7025/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "reasoning_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
-        "api_url": "http://10.137.144.97:7023/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "calculation_agent": {
-        "model": "/data/labshare/Param/Qwen/Qwen3-1.7B",
-        "api_url": "http://10.137.144.97:7023/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
-    },
-    "answerability_agent": {
-        "model": "/data/labshare/Param/LFM2.5-1.2B-Instruct",
-        "api_url": "http://10.137.144.97:7025/v1",
-        "api_key": "empty",
-        "temperature": 0.0,
-        "timeout": 120,
+    "3b": {
+        "l": (
+            "/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct",
+            "http://10.137.144.97:7011/v1",
+        ),
+        "g": (
+            "/data/labshare/Param/gemma-3-4b-it",
+            "http://10.137.144.97:7012/v1",
+        ),
+        "q": (
+            "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
+            "http://10.137.144.97:7013/v1",
+        ),
+        "p": (
+            "/data/labshare/Param/Phi-4-mini-instruct",
+            "http://10.137.144.97:7014/v1",
+        ),
+        "m": (
+            "/data/labshare/Param/MiniCPM3-4B",
+            "http://10.137.144.97:7015/v1",
+        ),
     },
 }
 
+PLAN_FILES = {
+    "llama": "benchmarks/iirc/iirc_plans_llama3.json",
+    "llada": "benchmarks/iirc/iirc_plans_llada.json",
+}
 
-# Edit these defaults directly before running the script.
+
+def build_agent_config(model_size, assignment):
+    try:
+        model_pool = MODEL_PRESETS[model_size]
+    except KeyError as exc:
+        valid_sizes = ", ".join(sorted(MODEL_PRESETS))
+        raise ValueError(
+            f"Unknown MODEL_SIZE {model_size!r}; expected one of: {valid_sizes}"
+        ) from exc
+
+    aliases = assignment.split("_")
+    if len(aliases) != len(AGENT_ORDER):
+        raise ValueError(
+            f"AGENT_ASSIGNMENT {assignment!r} must contain exactly five aliases "
+            "in context_retrieval_reasoning_calculation_answerability order"
+        )
+
+    unknown_aliases = sorted(set(aliases) - set(model_pool))
+    if unknown_aliases:
+        valid_aliases = ", ".join(sorted(model_pool))
+        raise ValueError(
+            f"Unknown {model_size} model aliases {unknown_aliases}; "
+            f"expected aliases from: {valid_aliases}"
+        )
+
+    config = {}
+    for agent_name, alias in zip(AGENT_ORDER, aliases):
+        model, api_url = model_pool[alias]
+        config[agent_name] = {
+            "alias": alias,
+            "model": model,
+            "api_url": api_url,
+            "api_key": "empty",
+            "temperature": 0.0,
+            "timeout": 120,
+        }
+    return config
+
+
+def plan_path_for_variant(plan_variant):
+    try:
+        return PLAN_FILES[plan_variant]
+    except KeyError as exc:
+        valid_variants = ", ".join(sorted(PLAN_FILES))
+        raise ValueError(
+            f"Unknown PLAN_VARIANT {plan_variant!r}; expected one of: {valid_variants}"
+        ) from exc
+
+
+AGENT_CONFIG = build_agent_config(MODEL_SIZE, AGENT_ASSIGNMENT)
+RESULTS_DIR = f"iirc_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
+
 CONFIG = {
     "mode": "respond",
-    "plans": "benchmarks/iirc/iirc_plans_llama3.json",
-    "responses": "iirc_test/results_1b_llama/subtask_hetro_responses_q_f_q_q_f.json",
-    "output": "iirc_test/results_1b_llama/subtask_hetro_scores_q_f_q_q_f.json",
+    "plans": plan_path_for_variant(PLAN_VARIANT),
+    "responses": f"{RESULTS_DIR}/subtask_hetro_responses_{AGENT_ASSIGNMENT}.json",
+    "output": f"{RESULTS_DIR}/subtask_hetro_scores_{AGENT_ASSIGNMENT}.json",
     "limit": None,
     "force": False,
     "retry_errors": True,
@@ -118,6 +176,7 @@ CONFIG = {
     "judge_temperature": 0.0,
     "judge_timeout": 120,
 }
+
 
 def load_json(path, default=None):
     if not path or not Path(path).exists():
@@ -445,6 +504,24 @@ def judge_rows(response_records, output_path, force=False):
     return result
 
 
+def print_run_config(args):
+    print(
+        f"Model assignment | size={MODEL_SIZE} | name={AGENT_ASSIGNMENT} "
+        f"| order={','.join(AGENT_ORDER)}",
+        flush=True,
+    )
+    for agent_name in AGENT_ORDER:
+        agent_config = AGENT_CONFIG[agent_name]
+        print(
+            f"  {agent_name}: alias={agent_config['alias']} "
+            f"| model={agent_config['model']} | api={agent_config['api_url']}",
+            flush=True,
+        )
+    print(f"Plans: {args.plans}", flush=True)
+    print(f"Responses: {args.responses}", flush=True)
+    print(f"Scores: {args.output}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Execute planner-selected subtasks with heterogeneous agent APIs, then judge offline results."
@@ -456,6 +533,7 @@ def main():
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
+    print_run_config(args)
 
     plans = load_json(args.plans, []) or []
     if not plans:

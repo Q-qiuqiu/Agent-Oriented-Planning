@@ -14,7 +14,7 @@ CONFIG = {
             "benchmark": "HuskyQA",
             "planner": "LLaDA",
             "path": ROOT
-            / "benchmarks/huskyqa/huskyqa_plans_llada.json",
+            / "benchmarks/huskyqa/huskyqa_plans_llada_now.json",
         },
         {
             "benchmark": "HuskyQA",

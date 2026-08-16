@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Edit these defaults directly before running the script.
 CONFIG = {
-    "plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+    "plans": "benchmarks/huskyqa/huskyqa_plans_llada_now.json",
     "device_counts": [1, 2, 3],
     "summary_output": "huskyqa_test/results/device_collision_summary_lru.json",
 }
