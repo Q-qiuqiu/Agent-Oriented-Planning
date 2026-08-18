@@ -19,8 +19,8 @@ from prompt import scorer_prompt
 #             d=deepseek, qm=qwen-math, qc=qwen-coder, i=internlm, s=smollm.
 # 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
 MODEL_SIZE = "1b"
-AGENT_ASSIGNMENT = "q_f_q_q_f"
-PLAN_VARIANT = "llama"
+AGENT_ASSIGNMENT = "s_s_s_s_s"
+PLAN_VARIANT = "llada_now"
 
 AGENT_ORDER = (
     "context_agent",
@@ -104,6 +104,7 @@ MODEL_PRESETS = {
 PLAN_FILES = {
     "llama": "benchmarks/iirc/iirc_plans_llama3.json",
     "llada": "benchmarks/iirc/iirc_plans_llada.json",
+    "llada_now": "benchmarks/iirc/iirc_plans_llada_now.json",
 }
 
 

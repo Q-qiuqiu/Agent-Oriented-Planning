@@ -20,17 +20,17 @@ CONFIG = {
             "benchmark": "HuskyQA",
             "planner": "Llama",
             "path": ROOT
-            / "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+            / "benchmarks/huskyqa/huskyqa_plans_full_llama3.json",
         },
         {
             "benchmark": "IIRC",
             "planner": "LLaDA",
-            "path": ROOT / "benchmarks/iirc/iirc_plans_llada.json",
+            "path": ROOT / "benchmarks/iirc/iirc_plans_llada_now.json",
         },
         {
             "benchmark": "IIRC",
             "planner": "Llama",
-            "path": ROOT / "benchmarks/iirc/iirc_plans_llama3.json",
+            "path": ROOT / "benchmarks/iirc/iirc_plans_full_llama3.json",
         },
     ],
 }

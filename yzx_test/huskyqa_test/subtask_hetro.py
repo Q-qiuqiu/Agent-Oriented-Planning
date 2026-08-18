@@ -19,7 +19,7 @@ from prompt import scorer_prompt
 #             d=deepseek, qm=qwen-math, qc=qwen-coder, i=internlm, s=smollm.
 # 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
 MODEL_SIZE = "1b"
-AGENT_ASSIGNMENT = "qc_q_d_m"
+AGENT_ASSIGNMENT = "q_qm_f_m"
 PLAN_VARIANT = "llada_now"
 
 AGENT_ORDER = (

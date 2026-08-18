@@ -9,15 +9,16 @@ from prompt import summarization_agent_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "responses": "iirc_test/results_1b_llama/subtask_hetro_responses_q_f_q_q_f.json",
+    "responses": "iirc_test/results_1b_llada_now/subtask_hetro_responses_s_s_s_s_s.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "iirc_test/results_1b_llama/summary_result_q_f_q_q_f.json",
+    "output": "iirc_test/results_1b_llada_now/summary_result_s_s_s_s_s.json",
     "force": False,
-    "summary_api_url": "http://10.137.144.97:7002/v1",
+    "summary_api_url": "http://10.137.144.97:7007/v1",
     "summary_api_key": "empty",
-    "summary_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"summary_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "summary_model": "/data/labshare/Param/llada",
     "summary_temperature": 0.0,
     "summary_timeout": 120,
 }

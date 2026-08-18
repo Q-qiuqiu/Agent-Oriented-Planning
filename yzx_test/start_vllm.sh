@@ -118,6 +118,36 @@ register_fastdllm_server \
     "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
     "7003" "1024" \
     "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
+register_fastdllm_server \
+    "llada4" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7004" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
+register_fastdllm_server \
+    "llada5" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7005" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
+register_fastdllm_server \
+    "llada6" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7006" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
+register_fastdllm_server \
+    "llada7" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7007" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
+register_fastdllm_server \
+    "llada8" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7008" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
+register_fastdllm_server \
+    "llada9" \
+    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "7009" "1024" \
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 
 register_model \
     "llama3-3b" \
