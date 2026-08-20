@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = {
     "benchmarks": {
         "huskyqa": {
-            "assignment": "qc_q_f_m",
-            "planner_file": "benchmarks/huskyqa/huskyqa_plans_llada_now.json",
-            "results_dir": "huskyqa_test/results_1b_llada_now",
+            "assignment": "f_q_m",
+            "planner_file": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+            "results_dir": "huskyqa_test/results_1b_llama",
             "timings_file": "benchmarks/fastdllm_log/huskyqa_timings.jsonl",
         },
         "iirc": {
@@ -28,9 +28,10 @@ CONFIG = {
     "huskyqa_queries_per_group": 1,
     "iirc_queries_per_group": 1,
     "iirc_partitions": 5,
-    "device_counts": [2, 3],
+    "device_counts": [2, 3, 4],
     "cold_start_file": "benchmarks/fastdllm_log/model_start_time.json",
-    "prefetch_agent_limit": 4,
+    # None means prefetch one useful model instance per available device.
+    "prefetch_agent_limit": None,
     "prefetch_time_field": "decision_seconds",
     "seconds_precision": 4,
 }
@@ -168,6 +169,7 @@ def simulate_arrivals(
                 clock,
                 prefetch_time_field,
                 prefetch_agent_limit,
+                plan_record=arrival["response"],
             )
         subtask_time, clock = timing.simulate_query_time(
             arrival["response"],
@@ -264,7 +266,8 @@ def main():
     if prefetch_time_field not in {"decision_seconds", "confirmation_seconds"}:
         raise ValueError("Unsupported prefetch_time_field")
     prefetch_agent_limit = CONFIG["prefetch_agent_limit"]
-    validate_positive_integer("prefetch_agent_limit", prefetch_agent_limit)
+    if prefetch_agent_limit is not None:
+        validate_positive_integer("prefetch_agent_limit", prefetch_agent_limit)
 
     partitions = partition_entries(
         datasets["iirc"]["entries"],
@@ -333,8 +336,8 @@ def main():
         CONFIG["seconds_precision"],
     )
     print_crossbench_table(
-        f"Cross-benchmark end-to-end with first-{prefetch_agent_limit} "
-        f"planner prefetch (five-run arithmetic mean, {prefetch_time_field})",
+        "Cross-benchmark end-to-end with device-count planner prefetch "
+        f"(five-run arithmetic mean, {prefetch_time_field})",
         prefetch_rows,
         CONFIG["seconds_precision"],
     )

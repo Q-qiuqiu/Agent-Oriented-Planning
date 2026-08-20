@@ -1,6 +1,21 @@
+# Generated benchmark data, responses, scores, caches, and local API secrets.
 *.json
-yzx_test/huskyqa_test/__pycache__/
-yzx_test/iirc_test/__pycache__/
-yzx_test/benchmarks/iirc/*.sqlite3
-yzx_test/__pycache__/
+*.jsonl
+*.sqlite
+*.sqlite3
+*.db
+keys/
+
+# Python and tool caches.
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime output.
+*.log
+*.tmp
+
+# The previous experiment tree is kept outside this repository.
+yzx_test_old/

@@ -6,20 +6,10 @@ from pathlib import Path
 
 import requests
 
+from build_subtask_benchmark import normalize_plan
 from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
-
-STANDARD_OUTPUT_BLOCK = """Output only valid JSON in this format:
-[
-  {
-    "id": 1,
-    "task": "subtask description",
-    "agent": "math_agent",
-    "reason": "why this agent is suitable",
-    "dep": []
-  }
-]"""
 
 LATENCY_TEST_OUTPUT_BLOCK = """For this single-query latency measurement,
 produce exactly two sections in the following order. The first section must be
@@ -44,7 +34,7 @@ PLAN_JSON
   {
     "id": 1,
     "task": "A detailed, self-contained, executable subtask that preserves all relevant entities, numbers, constraints, and expected output.",
-    "agent": "math_agent",
+    "agent": "search_agent",
     "reason": "A detailed explanation of why this role is the best fit and how its output supports the final answer.",
     "dep": []
   }
@@ -56,10 +46,12 @@ schema. Make every task and reason detailed and self-contained. Do not add
 comments, trailing commas, extra fields, or prose inside the JSON array.
 """
 
-if STANDARD_OUTPUT_BLOCK not in planner_prompt:
-    raise RuntimeError("Cannot locate the standard planner output instructions")
 LATENCY_TEST_PLANNER_PROMPT = planner_prompt.replace(
-    STANDARD_OUTPUT_BLOCK,
+    "Output only one valid JSON array in this exact schema:",
+    "The PLAN_JSON array must use this exact schema:",
+    1,
+).replace(
+    "- Do not include analysis, markdown fences, comments, or text outside the array.",
     LATENCY_TEST_OUTPUT_BLOCK,
     1,
 )
@@ -197,7 +189,7 @@ def request_plan(query_record):
     parse_started = time.perf_counter()
     parse_error = None
     try:
-        plan = extract_json_array(raw_output)
+        plan = normalize_plan(extract_json_array(raw_output))
     except Exception as exc:
         plan = None
         parse_error = str(exc)

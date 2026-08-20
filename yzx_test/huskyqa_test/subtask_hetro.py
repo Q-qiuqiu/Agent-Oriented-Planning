@@ -14,19 +14,18 @@ from prompt import scorer_prompt
 
 
 # Only edit these values when switching heterogeneous model combinations.
-# Assignment order: code_agent, math_agent, search_agent, commonsense_agent.
+# Assignment order: search_agent, calculation_agent, reasoning_agent.
 # 1b aliases: l=llama, g=gemma, q=qwen3, h=hunyuan, f=lfm, m=minicpm,
 #             d=deepseek, qm=qwen-math, qc=qwen-coder, i=internlm, s=smollm.
 # 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
 MODEL_SIZE = "1b"
-AGENT_ASSIGNMENT = "q_qm_f_m"
-PLAN_VARIANT = "llada_now"
+AGENT_ASSIGNMENT = "f_q_m"
+PLAN_VARIANT = "llada"
 
 AGENT_ORDER = (
-    "code_agent",
-    "math_agent",
     "search_agent",
-    "commonsense_agent",
+    "calculation_agent",
+    "reasoning_agent",
 )
 
 # Aliases are scoped by MODEL_SIZE, so the same short name can represent the
@@ -137,8 +136,8 @@ def build_agent_config(model_size, assignment):
     aliases = assignment.split("_")
     if len(aliases) != len(AGENT_ORDER):
         raise ValueError(
-            f"AGENT_ASSIGNMENT {assignment!r} must contain exactly four aliases "
-            "in code_math_search_commonsense order"
+            f"AGENT_ASSIGNMENT {assignment!r} must contain exactly three aliases "
+            "in search_calculation_reasoning order"
         )
 
     unknown_aliases = sorted(set(aliases) - set(model_pool))

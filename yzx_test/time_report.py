@@ -5,11 +5,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 
-# Normally you only need to edit assignments. Four aliases select HuskyQA;
-# five aliases select IIRC. Add multiple values for batch reporting.
+# Normally you only need to edit assignments. Three aliases select the rebuilt
+# HuskyQA workflow; five aliases select IIRC after it is migrated.
 CONFIG = {
     "assignments": [
-        "q_q_q_q",
+        "f_q_m",
         # "g_g_g_g_g",
         # "q_q_q_q",
         # "g_g_g_g",
@@ -31,14 +31,14 @@ CONFIG = {
             ),
         },
         "huskyqa": {
-            "role_count": 4,
+            "role_count": 3,
             "planner_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
-                "huskyqa/huskyqa_plans_llada_now.json"
+                "huskyqa/huskyqa_plans_llama3.json"
             ),
             "results_dir": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/"
-                "huskyqa_test/results_1b_llada_now"
+                "huskyqa_test/results_1b_llama"
             ),
             "timings_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
@@ -51,7 +51,8 @@ CONFIG = {
         "fastdllm_log/model_start_time.json"
     ),
     "device_counts": [2, 3, 4],
-    "prefetch_agent_limit": 4,
+    # None means prefetch one useful model instance per available device.
+    "prefetch_agent_limit": None,
     "prefetch_time_field": "decision_seconds",
     "seconds_precision": 4,
 }
@@ -363,6 +364,7 @@ def prepare_planner_prefetch(
     clock,
     time_field,
     agent_limit,
+    plan_record=None,
 ):
     device_ready_times = [0.0] * len(devices)
     if (
@@ -379,18 +381,73 @@ def prepare_planner_prefetch(
     events = sorted(
         (
             event
-            for event in (timing.get("agents") or [])[:agent_limit]
+            for event in (timing.get("agents") or [])
             if isinstance(event, dict)
         ),
         key=lambda event: event.get("slot", 0),
     )
+
+    task_waves = None
+    if plan_record is not None:
+        tasks = prepare_simulation_tasks(plan_record)
+        unresolved = set(range(len(tasks)))
+        task_waves = {}
+        while unresolved:
+            progressed = False
+            for task_index in sorted(unresolved):
+                dependencies = tasks[task_index]["dependencies"]
+                if not all(dependency in task_waves for dependency in dependencies):
+                    continue
+                task_waves[task_index] = (
+                    0
+                    if not dependencies
+                    else 1 + max(task_waves[dependency] for dependency in dependencies)
+                )
+                unresolved.remove(task_index)
+                progressed = True
+                break
+            if not progressed:
+                raise ValueError(
+                    f"Dependency cycle at source_index="
+                    f"{plan_record.get('source_index')}"
+                )
+
     available_devices = set(range(len(devices)))
+    prefetch_capacity = (
+        len(devices)
+        if agent_limit is None
+        else min(len(devices), agent_limit)
+    )
+    prefetched_copies = {}
+    wave_model_occurrences = {}
+    prefetch_count = 0
     for event in events:
-        if not available_devices:
+        if not available_devices or prefetch_count >= prefetch_capacity:
             break
         model = agent_models.get(event.get("agent"))
         detected_at = event.get(time_field)
         if model is None or not valid_time(detected_at):
+            continue
+
+        slot = event.get("slot")
+        if (
+            task_waves is not None
+            and isinstance(slot, int)
+            and slot in task_waves
+        ):
+            wave = task_waves[slot]
+        else:
+            # Without a matching dependency record, assume the event could run
+            # concurrently so that prefetching does not under-provision copies.
+            wave = 0
+        wave_key = (wave, model)
+        wave_model_occurrences[wave_key] = (
+            wave_model_occurrences.get(wave_key, 0) + 1
+        )
+        required_copies = wave_model_occurrences[wave_key]
+        if prefetched_copies.get(model, 0) >= required_copies:
+            # A copy reserved for another dependency wave can be reused. Keep
+            # scanning later planner events to find a model that needs a device.
             continue
 
         matching_devices = [
@@ -426,6 +483,8 @@ def prepare_planner_prefetch(
         devices[device_index]["last_used"] = clock
         device_ready_times[device_index] = remaining_load
         available_devices.remove(device_index)
+        prefetched_copies[model] = prefetched_copies.get(model, 0) + 1
+        prefetch_count += 1
 
     return device_ready_times, clock
 
@@ -577,6 +636,7 @@ def simulate_prefetched_subtask_times(
             clock,
             time_field,
             agent_limit,
+            plan_record=response_records[key],
         )
         times[key], clock = simulate_query_time(
             response_records[key],
@@ -663,6 +723,48 @@ def print_table(rows, precision):
         print(render(row))
 
 
+def agent_call_bucket(call_count):
+    return str(call_count) if call_count <= 4 else "5+"
+
+
+def print_call_count_table(rows, precision):
+    headers = [
+        "Devices",
+        "Agent calls/query",
+        "Queries",
+        "No prefetch avg (s)",
+        "Prefetch avg (s)",
+        "Saved avg (s)",
+        "Improvement",
+    ]
+    rendered_rows = [
+        [
+            str(row["devices"]),
+            row["bucket"],
+            str(row["count"]),
+            format_number(row["baseline_mean"], precision),
+            format_number(row["prefetch_mean"], precision),
+            format_number(row["saved_mean"], precision),
+            f"{row['improvement']:.2%}",
+        ]
+        for row in rows
+    ]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rendered_rows))
+        for index in range(len(headers))
+    ]
+
+    def render(row):
+        return "| " + " | ".join(
+            value.ljust(widths[index]) for index, value in enumerate(row)
+        ) + " |"
+
+    print(render(headers))
+    print("|-" + "-|-".join("-" * width for width in widths) + "-|")
+    for row in rendered_rows:
+        print(render(row))
+
+
 def report_run(
     benchmark,
     planner_path,
@@ -730,6 +832,7 @@ def report_run(
         ("Computed end-to-end", summarize(end_to_end, expected_count)),
     ]
     prefetch_rows = []
+    call_count_rows = []
     for device_count in device_counts:
         simulated_subtask_by_query = simulate_real_subtask_times(
             responses,
@@ -771,6 +874,41 @@ def report_run(
                 summarize(prefetched_end_to_end, expected_count),
             )
         )
+        baseline_by_query = {
+            key: planner_by_query[key]
+            + simulated_subtask_by_query[key]
+            + summary_by_query[key]
+            for key in ordered_complete_keys
+        }
+        prefetch_by_query = {
+            key: planner_by_query[key]
+            + prefetched_subtask_by_query[key]
+            + summary_by_query[key]
+            for key in ordered_complete_keys
+        }
+        grouped_keys = {bucket: [] for bucket in ("1", "2", "3", "4", "5+")}
+        for key in ordered_complete_keys:
+            call_count = len(responses[key].get("steps") or [])
+            grouped_keys[agent_call_bucket(call_count)].append(key)
+        for bucket, keys in grouped_keys.items():
+            if not keys:
+                continue
+            baseline_mean = sum(baseline_by_query[key] for key in keys) / len(keys)
+            prefetch_mean = sum(prefetch_by_query[key] for key in keys) / len(keys)
+            saved_mean = baseline_mean - prefetch_mean
+            call_count_rows.append(
+                {
+                    "devices": device_count,
+                    "bucket": bucket,
+                    "count": len(keys),
+                    "baseline_mean": baseline_mean,
+                    "prefetch_mean": prefetch_mean,
+                    "saved_mean": saved_mean,
+                    "improvement": (
+                        saved_mean / baseline_mean if baseline_mean else 0.0
+                    ),
+                }
+            )
 
     print(f"Planner:  {planner_path}")
     print(f"Responses: {response_path}")
@@ -778,11 +916,21 @@ def report_run(
     print(f"Cold start: {cold_start_path}")
     print(f"Timings:   {timings_path}")
     print_table(rows, precision)
+    prefetch_scope = (
+        "device-count"
+        if prefetch_agent_limit is None
+        else f"first-{prefetch_agent_limit}"
+    )
     print(
-        f"\nPlanner-time first-{prefetch_agent_limit} agent prefetch "
+        f"\nPlanner-time {prefetch_scope} agent prefetch "
         f"({prefetch_time_field})"
     )
     print_table(prefetch_rows, precision)
+    print(
+        "\nEnd-to-end improvement by sub-agent calls/query "
+        "(successful queries only)"
+    )
+    print_call_count_table(call_count_rows, precision)
 
 
 def main():
@@ -814,13 +962,15 @@ def main():
             "CONFIG['prefetch_time_field'] must be decision_seconds or "
             "confirmation_seconds"
         )
-    prefetch_agent_limit = CONFIG.get("prefetch_agent_limit", 4)
-    if (
+    prefetch_agent_limit = CONFIG.get("prefetch_agent_limit")
+    if prefetch_agent_limit is not None and (
         not isinstance(prefetch_agent_limit, int)
         or isinstance(prefetch_agent_limit, bool)
         or prefetch_agent_limit <= 0
     ):
-        raise ValueError("CONFIG['prefetch_agent_limit'] must be a positive integer")
+        raise ValueError(
+            "CONFIG['prefetch_agent_limit'] must be None or a positive integer"
+        )
 
     for assignment in assignments:
         benchmark = benchmark_for_assignment(assignment, benchmark_configs)

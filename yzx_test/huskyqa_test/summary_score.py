@@ -8,13 +8,19 @@ from openai_compat import run_chat_completion
 from prompt import evaluate_prompt
 
 
-# Edit these values directly before running.
+# Keep these values aligned with subtask_hetro.py and summary_evaluate.py.
+MODEL_SIZE = "1b"
+AGENT_ASSIGNMENT = "f_q_m"
+PLAN_VARIANT = "llada"
+RESULTS_DIR = f"huskyqa_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
+
+# Edit judge API settings directly before running.
 CONFIG = {
-    "input": "huskyqa_test/results_1b_llada_now/summary_result_q_qm_f_m.json",
+    "input": f"{RESULTS_DIR}/summary_result_{AGENT_ASSIGNMENT}.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "huskyqa_test/results_1b_llada_now/summary_score_q_qm_f_m.json",
+    "output": f"{RESULTS_DIR}/summary_score_{AGENT_ASSIGNMENT}.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",

@@ -10,12 +10,8 @@ from openai_compat import run_chat_completion
 from prompt import planner_prompt
 
 
-AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
-LLADA_PROMPT_VERSION = "huskyqa_shared_llama_prompt_v1"
-
-
-def is_llada_model(model):
-    return "llada" in str(model).lower()
+AGENTS = ["search_agent", "calculation_agent", "reasoning_agent"]
+PLANNER_PROMPT_VERSION = "huskyqa_three_agents_recommend_five_calls_v3"
 
 
 def planner_prompt_for_model(model):
@@ -23,19 +19,19 @@ def planner_prompt_for_model(model):
 
 
 def planner_prompt_version_for_model(model):
-    return LLADA_PROMPT_VERSION if is_llada_model(model) else None
+    return PLANNER_PROMPT_VERSION
 
 # Edit these defaults directly when running from this file.
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
-    "plans_output": "benchmarks/huskyqa/huskyqa_plans_llada_now.json",
-    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_llada_now.json",
-    "planner_api_url": "http://10.137.144.97:7004/v1",
+    "plans_output": "benchmarks/huskyqa/huskyqa_plans_llada.json",
+    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_llada.json",
+    "planner_api_url": "http://10.137.144.97:7003/v1",
     "planner_api_key": "empty",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
-    "timeout": 120,
+    "timeout": 180,
     "limit": None,
     "agents": AGENTS,
 }
@@ -82,10 +78,21 @@ def extract_json_array(text):
 
 
 def normalize_plan(plan):
-    normalized = []
-    for i, step in enumerate(plan, start=1):
+    if not plan:
+        raise ValueError("Plan must contain at least one step")
+
+    prepared = []
+    original_ids = {}
+    for index, step in enumerate(plan, start=1):
+        if not isinstance(step, dict):
+            raise ValueError(f"Plan step {index} is not a JSON object: {step!r}")
         item = dict(step)
-        item.setdefault("id", i)
+        original_id = item.get("id", index)
+        original_key = str(original_id)
+        if original_key in original_ids:
+            raise ValueError(f"Plan has duplicate step id {original_id!r}")
+        original_ids[original_key] = index
+        item["id"] = index
         if "agent" not in item:
             item["agent"] = item.get("name") or item.get("name_1")
         if isinstance(item.get("agent"), str):
@@ -95,7 +102,41 @@ def normalize_plan(plan):
                 f"Plan step {item['id']} has unsupported agent "
                 f"{item.get('agent')!r}; expected one of {AGENTS}"
             )
-        item.setdefault("dep", [])
+        task = item.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError(f"Plan step {index} has no non-empty task")
+        item["task"] = task.strip()
+        reason = item.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"Plan step {index} has no non-empty reason")
+        item["reason"] = reason.strip()
+        prepared.append(item)
+
+    normalized = []
+    for index, item in enumerate(prepared, start=1):
+        dependencies = item.get("dep")
+        if dependencies is None:
+            dependencies = []
+        elif not isinstance(dependencies, list):
+            dependencies = [dependencies]
+
+        normalized_dependencies = []
+        for dependency in dependencies:
+            if isinstance(dependency, dict):
+                dependency = dependency.get("id")
+            dependency_key = str(dependency)
+            if dependency_key not in original_ids:
+                raise ValueError(
+                    f"Plan step {index} references missing dependency {dependency!r}"
+                )
+            normalized_dependency = original_ids[dependency_key]
+            if normalized_dependency >= index:
+                raise ValueError(
+                    f"Plan step {index} dependency {dependency!r} must refer to an earlier step"
+                )
+            if normalized_dependency not in normalized_dependencies:
+                normalized_dependencies.append(normalized_dependency)
+        item["dep"] = normalized_dependencies
         normalized.append(item)
     return normalized
 

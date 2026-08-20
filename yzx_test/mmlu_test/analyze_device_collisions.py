@@ -6,21 +6,21 @@ from pathlib import Path
 
 # Edit these defaults directly before running the script.
 CONFIG = {
-    "plans": "benchmarks/huskyqa/huskyqa_plans_llada.json",
+    "plans": "benchmarks/mmlu_pro/mmlu_pro_plans_llada.json",
     "device_counts": [1, 2, 3],
-    "summary_output": "huskyqa_test/results/device_collision_summary_lru.json",
+    "summary_output": "mmlu_test/results/device_collision_summary_lru.json",
 }
 
 MODEL_CONFIGS = {
     "3 agents / 2 models": {
-        "search_agent": "search-model",
-        "calculation_agent": "worker-model",
-        "reasoning_agent": "worker-model",
+        "knowledge_agent": "knowledge-model",
+        "reasoning_agent": "reasoning-model",
+        "elimination_agent": "reasoning-model",
     },
     "3 agents / 3 independent models": {
-        "search_agent": "search-model",
-        "calculation_agent": "calculation-model",
+        "knowledge_agent": "knowledge-model",
         "reasoning_agent": "reasoning-model",
+        "elimination_agent": "elimination-model",
     },
 }
 

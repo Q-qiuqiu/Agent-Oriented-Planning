@@ -9,11 +9,11 @@ from prompt import plan_detector_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "plans": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
+    "plans": "benchmarks/huskyqa/huskyqa_plans_llada.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "huskyqa_test/results/plan_evaluate_llama3.json",
+    "output": "huskyqa_test/results/plan_evaluate_llada.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",

@@ -1,24 +1,16 @@
-# Planner and Sub-Agent Evaluation
+# Agent-Oriented Planning Experiments
 
-This directory contains two isolated evaluation suites with the same main
-pipeline:
+This directory contains the rebuilt benchmark-specific evaluation workflow.
+HuskyQA is currently configured for three agent roles and recommends no more
+than five sub-agent calls per query. Longer plans are still accepted. A role may
+be called repeatedly without implying a new model cold start. Run all commands
+from this directory so relative paths resolve correctly.
 
-1. planner decomposition and offline plan storage;
-2. plan-only evaluation;
-3. role-fit or heterogeneous sub-agent execution;
-4. offline response summarization;
-5. final-answer evaluation.
+See `huskyqa_test/README.md` for the complete HuskyQA pipeline and
+`mmlu_test/README.md` for the three-perspective MMLU-Pro pipeline.
 
-Run all commands from this directory. Model names, API endpoints, temperatures,
-timeouts, and default paths are grouped in `CONFIG` or `AGENT_CONFIG` near the
-top of each executable script.
-
-## Layout
-
-- `benchmarks/huskyqa/`: HuskyQA input, plans, and expanded subtasks.
-- `benchmarks/iirc/`: IIRC source data, flattened dev questions, and SQLite FTS5
-  article index.
-- `huskyqa_test/`: the existing HuskyQA pipeline, caches, and historical results.
-- `iirc_test/`: the IIRC-adapted pipeline and its result directory.
-
-See `huskyqa_test/README.md` and `iirc_test/README.md` for the commands.
+Timing simulation is provided by `time_report.py`. Planner-time prefetching
+fills up to the configured device count, skips duplicate model loads for tasks
+in different dependency waves, and keeps duplicate copies only when the same
+model is needed concurrently in one wave. `time_report_crossbench.py` applies
+the same policy to interleaved benchmark arrivals after IIRC is migrated.

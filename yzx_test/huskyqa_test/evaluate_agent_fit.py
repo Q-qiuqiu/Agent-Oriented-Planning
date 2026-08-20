@@ -1,28 +1,22 @@
 import argparse
 import json
 import re
-import subprocess
-import sys
 import time
 from pathlib import Path
 
-from get_response import _extract_python_code
 from openai_compat import run_chat_completion
 from prompt import (
-    code_agent_prompt,
-    commonsense_agent_prompt,
-    math_agent_prompt,
-    rewrite_code_agent_prompt,
-    rewrite_math_agent_prompt,
+    calculation_agent_prompt,
+    reasoning_agent_prompt,
+    rewrite_calculation_agent_prompt,
     rewrite_search_agent_prompt,
     scorer_prompt,
     search_agent_prompt,
 )
 from search import search_web
-from utils import simplify_answer
 
 
-AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
+AGENTS = ["search_agent", "calculation_agent", "reasoning_agent"]
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 #/data/labshare/Param/llama/llama3/Llama-3.2-3B-Instruct
@@ -30,8 +24,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG = {
     "mode": "respond",
     "models": "/data/labshare/Param/Qwen/Qwen3-4B-Instruct-2507",
-    "agents": ["search_agent"],
-    "benchmarks": "benchmarks/huskyqa/huskyqa_subtask_llama3.json",
+    "agents": AGENTS,
+    "benchmarks": "benchmarks/huskyqa/huskyqa_subtask_llada.json",
     "responses": "huskyqa_test/results/agent_fit_responses_qwen3.json",
     "output": "huskyqa_test/results/agent_fit_results_qwen3.json",
     "local_api_url": "http://10.137.144.97:7003/v1",
@@ -47,7 +41,7 @@ CONFIG = {
     "ddgs_results_per_backend": 10,
     "ddgs_max_workers": 3,
     "search_top_k": 10,
-    "search_cache_path": "huskyqa_test/cache/search_cache_qwen3.json",
+    "search_cache_path": "cache/search_cache_qwen3.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",
@@ -58,15 +52,9 @@ CONFIG = {
 
 DEFAULT_BENCHMARKS = [
     {
-        "agent": "math_agent",
+        "agent": "calculation_agent",
         "query": "A store sold 36 notebooks on Monday and 48 on Tuesday. If each notebook costs 7 dollars, what was the total revenue?",
-        "task": "Calculate the total revenue from selling 36 notebooks and 48 notebooks at 7 dollars each.",
-        "history": "None",
-    },
-    {
-        "agent": "code_agent",
-        "query": "Find the median of the numbers 18, 7, 22, 5, 13, 9, 31.",
-        "task": "Write Python code to compute the median of [18, 7, 22, 5, 13, 9, 31].",
+        "task": "Calculate the total revenue from both days in one consolidated calculation.",
         "history": "None",
     },
     {
@@ -76,7 +64,7 @@ DEFAULT_BENCHMARKS = [
         "history": "None",
     },
     {
-        "agent": "commonsense_agent",
+        "agent": "reasoning_agent",
         "query": "If a glass cup is dropped on a concrete floor, what is likely to happen?",
         "task": "Answer what is likely to happen when a glass cup is dropped on a concrete floor.",
         "history": "None",
@@ -107,14 +95,12 @@ def normalize_models(models):
 
 
 def build_prompt(agent_name, query, task, history):
-    if agent_name == "math_agent":
-        return math_agent_prompt % (query, task, history)
-    if agent_name == "code_agent":
-        return code_agent_prompt % (query, task, history)
+    if agent_name == "calculation_agent":
+        return calculation_agent_prompt % (query, task, history)
     if agent_name == "search_agent":
         return search_agent_prompt % (task, history)
-    if agent_name == "commonsense_agent":
-        return commonsense_agent_prompt % (query, task, history)
+    if agent_name == "reasoning_agent":
+        return reasoning_agent_prompt % (query, task, history)
     raise ValueError(f"Unknown agent: {agent_name}")
 
 
@@ -289,10 +275,10 @@ def format_for_scorer(
     ddgs_results_per_backend=10,
     ddgs_max_workers=3,
     search_top_k=10,
-    search_cache_path="huskyqa_test/cache/search_cache_ddgs_parallel_proxy.json",
+    search_cache_path="cache/search_cache_ddgs_parallel_proxy.json",
 ):
-    if agent_name == "math_agent":
-        rewrite_prompt = rewrite_math_agent_prompt % (task, raw_output)
+    if agent_name == "calculation_agent":
+        rewrite_prompt = rewrite_calculation_agent_prompt % (task, raw_output)
         try:
             rewritten = run_chat_completion(
                 model,
@@ -340,48 +326,7 @@ def format_for_scorer(
         )
         return final_answer, {"search_query": search_query, "search_snippets": snippets}
 
-    if agent_name != "code_agent":
-        return raw_output, {}
-
-    code = _extract_python_code(raw_output)
-    metadata = {"code": code}
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        code_output = simplify_answer(result.stdout.strip(), convert_to_str=True)
-        if result.stderr.strip():
-            code_output = f"[ERROR] {result.stderr.strip()}"
-    except Exception as exc:
-        code_output = f"[ERROR] {exc}"
-
-    metadata["code_output"] = code_output
-    rewrite_prompt = rewrite_code_agent_prompt % (task, code, code_output)
-    try:
-        rewritten = run_chat_completion(
-            model,
-            rewrite_prompt,
-            local_api_url,
-            local_api_key,
-            local_timeout,
-            local_temperature,
-        )
-    except Exception:
-        rewritten = code_output
-
-    scorer_response = """
-[The Start of the Code to Solve the Question]
-%s
-[The End of the Code to Solve the Question]
-[The Start of the Rewritten Response by Running the Code]
-%s
-[The End of the Rewritten Response by Running the Code]
-""" % (code, rewritten)
-    metadata["rewritten_response"] = rewritten
-    return scorer_response, metadata
+    return raw_output, {}
 
 
 def response_key(model, item):
@@ -410,7 +355,7 @@ def generate_responses(
     ddgs_results_per_backend=10,
     ddgs_max_workers=3,
     search_top_k=10,
-    search_cache_path="huskyqa_test/cache/search_cache_ddgs_parallel_proxy.json",
+    search_cache_path="cache/search_cache_ddgs_parallel_proxy.json",
     existing_rows=None,
     force=False,
 ):

@@ -7,22 +7,11 @@ from pathlib import Path
 import requests
 
 from openai_compat import auth_header, chat_completions_url
+from build_subtask_benchmark import AGENTS, normalize_plan as normalize_standard_plan
 from prompt import planner_prompt
 
 
-AGENTS = ["code_agent", "math_agent", "search_agent", "commonsense_agent"]
-FULL_PROMPT_VERSION = "huskyqa_full_shared_planner_prompt_v2"
-
-STANDARD_OUTPUT_BLOCK = """Output only valid JSON in this format:
-[
-  {
-    "id": 1,
-    "task": "subtask description",
-    "agent": "math_agent",
-    "reason": "why this agent is suitable",
-    "dep": []
-  }
-]"""
+FULL_PROMPT_VERSION = "huskyqa_three_agents_recommend_five_calls_full_v3"
 
 FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
 and JSON plan that you would produce under the original instructions. The only
@@ -40,7 +29,7 @@ PLAN_JSON
   {
     "id": 1,
     "task": "subtask description",
-    "agent": "math_agent",
+    "agent": "search_agent",
     "reason": "why this agent is suitable",
     "dep": []
   }
@@ -48,10 +37,12 @@ PLAN_JSON
 END_PLAN_JSON
 """
 
-if STANDARD_OUTPUT_BLOCK not in planner_prompt:
-    raise RuntimeError("Cannot locate the standard planner output instructions")
 FULL_PLANNER_PROMPT = planner_prompt.replace(
-    STANDARD_OUTPUT_BLOCK,
+    "Output only one valid JSON array in this exact schema:",
+    "The PLAN_JSON array must use this exact schema:",
+    1,
+).replace(
+    "- Do not include analysis, markdown fences, comments, or text outside the array.",
     FULL_OUTPUT_BLOCK,
     1,
 )
@@ -162,22 +153,7 @@ def extract_planning_reasoning(text):
 
 
 def normalize_plan(plan):
-    normalized = []
-    for index, step in enumerate(plan, start=1):
-        item = dict(step)
-        item.setdefault("id", index)
-        if "agent" not in item:
-            item["agent"] = item.get("name") or item.get("name_1")
-        if isinstance(item.get("agent"), str):
-            item["agent"] = item["agent"].strip().lower()
-        if item.get("agent") not in AGENTS:
-            raise ValueError(
-                f"Plan step {item['id']} has unsupported agent "
-                f"{item.get('agent')!r}; expected one of {AGENTS}"
-            )
-        item.setdefault("dep", [])
-        normalized.append(item)
-    return normalized
+    return normalize_standard_plan(plan)
 
 
 def ordered_records(records_by_index):

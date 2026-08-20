@@ -7,13 +7,19 @@ from openai_compat import run_chat_completion
 from prompt import summarization_agent_prompt
 
 
-# Edit these values directly before running.
+# Keep these values aligned with subtask_hetro.py.
+MODEL_SIZE = "1b"
+AGENT_ASSIGNMENT = "f_q_m"
+PLAN_VARIANT = "llada"
+RESULTS_DIR = f"huskyqa_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
+
+# Edit API settings directly before running.
 CONFIG = {
-    "responses": "huskyqa_test/results_1b_llada_now/subtask_hetro_responses_qc_q_d_m.json",
+    "responses": f"{RESULTS_DIR}/subtask_hetro_responses_{AGENT_ASSIGNMENT}.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "huskyqa_test/results_1b_llada_now/summary_result_qc_q_d_m.json",
+    "output": f"{RESULTS_DIR}/summary_result_{AGENT_ASSIGNMENT}.json",
     "force": False,
     "summary_api_url": "http://10.137.144.97:7007/v1",
     "summary_api_key": "empty",

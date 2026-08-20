@@ -1,24 +1,13 @@
-import re
-import subprocess
-import sys
 import time
 
 from planner import agent, response_text
 from prompt import (
-    code_agent_prompt,
-    commonsense_agent_prompt,
-    math_agent_prompt,
-    rewrite_code_agent_prompt,
+    calculation_agent_prompt,
+    reasoning_agent_prompt,
     search_agent_prompt,
     summarization_agent_prompt,
 )
 from search import DDGSSearch
-from utils import simplify_answer
-
-
-def _extract_python_code(text):
-    match = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL)
-    return match.group(1).strip() if match else text.strip()
 
 
 def _call_agent(prompt, model="gpt-4o"):
@@ -29,8 +18,8 @@ def get_response(agent_name, subtask, query, history="", model="gpt-4o"):
     start_time = time.time()
     history = history or "None"
 
-    if agent_name == "math_agent":
-        prompt = math_agent_prompt % (query, subtask, history)
+    if agent_name == "calculation_agent":
+        prompt = calculation_agent_prompt % (query, subtask, history)
         answer = _call_agent(prompt, model=model)
         return {
             "task": subtask,
@@ -39,38 +28,13 @@ def get_response(agent_name, subtask, query, history="", model="gpt-4o"):
             "time": time.time() - start_time,
         }
 
-    if agent_name == "commonsense_agent":
-        prompt = commonsense_agent_prompt % (query, subtask, history)
+    if agent_name == "reasoning_agent":
+        prompt = reasoning_agent_prompt % (query, subtask, history)
         answer = _call_agent(prompt, model=model)
         return {
             "task": subtask,
             "agent": agent_name,
             "response": answer,
-            "time": time.time() - start_time,
-        }
-
-    if agent_name == "code_agent":
-        original_answer = _call_agent(code_agent_prompt % (query, subtask, history), model=model)
-        code = _extract_python_code(original_answer)
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        code_output = simplify_answer(result.stdout.strip(), convert_to_str=True)
-        if result.stderr.strip():
-            code_output = f"[ERROR] {result.stderr.strip()}"
-        rewritten = _call_agent(
-            rewrite_code_agent_prompt % (subtask, code, code_output),
-            model=model,
-        )
-        return {
-            "task": subtask,
-            "agent": agent_name,
-            "code": code,
-            "code_output": code_output,
-            "response": rewritten,
             "time": time.time() - start_time,
         }
 
@@ -89,6 +53,9 @@ def get_response(agent_name, subtask, query, history="", model="gpt-4o"):
 
 
 def normalize_plan(plan):
+    allowed_agents = {"search_agent", "calculation_agent", "reasoning_agent"}
+    if not plan:
+        raise ValueError("A HuskyQA plan must contain at least one step")
     normalized = []
     for index, step in enumerate(plan, start=1):
         item = dict(step)
@@ -97,6 +64,8 @@ def normalize_plan(plan):
             item["agent"] = item.get("name") or item.get("name_1")
         if not item.get("agent"):
             raise ValueError(f"Plan step {index} has no agent/name/name_1 field: {step}")
+        if item["agent"] not in allowed_agents:
+            raise ValueError(f"Unknown agent: {item['agent']}")
         item.setdefault("dep", [])
         normalized.append(item)
     return normalized

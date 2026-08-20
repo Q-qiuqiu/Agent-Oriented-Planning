@@ -1,21 +1,38 @@
-# HuskyQA Evaluation
+# HuskyQA Three-Agent Evaluation
 
-Run commands from the `yzx_test` directory. Edit the `CONFIG` and
-`AGENT_CONFIG` dictionaries near the top of each script to set model paths and
-OpenAI-compatible API endpoints.
+Run commands from the `yzx_test` directory. API endpoints and model names are
+kept in the `CONFIG` dictionaries near the top of each script.
 
-## Data
+## Agent Policy
 
-- `benchmarks/huskyqa/huskyqa_raw.json`: original questions.
-- `benchmarks/huskyqa/huskyqa_plans_llama3.json`: saved planner output.
-- `benchmarks/huskyqa/huskyqa_subtask_llama3.json`: each planned subtask expanded
-  across the four agent roles for model-role evaluation.
-- `huskyqa_test/cache/`: saved web-search results.
-- `huskyqa_test/results/`: offline responses and judged outputs.
+The benchmark defines exactly three roles:
+
+- `search_agent`: retrieves all external facts in one consolidated call.
+- `calculation_agent`: performs all numerical or programmatic work in one call.
+- `reasoning_agent`: handles optional non-numerical reasoning.
+
+A plan should normally contain no more than five steps, but this is a soft
+recommendation: longer valid plans are accepted. Any of the three roles may
+occur repeatedly; this means another request to an already loaded model, not
+another model cold start. Independent searches should run without dependencies,
+and related calculations should normally be merged into a later task that waits
+for all required results. Repeated calculation or reasoning calls remain valid
+when they represent distinct dependency stages. The final answer is produced
+separately by the summary model.
+
+## Data And Outputs
+
+- `benchmarks/huskyqa/huskyqa_raw.json`: original 292 HuskyQA questions.
+- `benchmarks/huskyqa/huskyqa_plans_llada.json`: planner records.
+- `benchmarks/huskyqa/huskyqa_subtask_llada.json`: each planned task expanded
+  across the three roles for model-role evaluation.
+- `huskyqa_test/cache/`: web-search caches.
+- `huskyqa_test/results/`: plan and role-fit evaluation results.
+- `huskyqa_test/results_1b_llada/`: heterogeneous execution and summary results.
 
 ## Pipeline
 
-Generate plans and the expanded role-fit benchmark:
+Generate normalized plans and the expanded role-fit benchmark:
 
 ```bash
 python3 huskyqa_test/build_subtask_benchmark.py
@@ -27,15 +44,14 @@ Evaluate plan completeness and non-redundancy:
 python3 huskyqa_test/evaluate.py
 ```
 
-Generate role-fit responses, then judge the saved responses:
+Generate role-fit responses and judge the saved responses:
 
 ```bash
 python3 huskyqa_test/evaluate_agent_fit.py --mode respond
 python3 huskyqa_test/evaluate_agent_fit.py --mode judge
 ```
 
-Execute each planner-selected role with its configured heterogeneous model, then
-judge each subtask:
+Execute planner-selected roles with heterogeneous models and judge each task:
 
 ```bash
 python3 huskyqa_test/subtask_hetro.py --mode respond
@@ -49,4 +65,7 @@ python3 huskyqa_test/summary_evaluate.py
 python3 huskyqa_test/summary_score.py
 ```
 
-`plan_evaluate.py` remains as a compatibility alias for `evaluate.py`.
+Use `build_subtask_full_benchmark.py` only when planner reasoning plus the JSON
+plan is needed. `benchmark_planner_latency.py` measures one query with that
+verbose response format. `plan_evaluate.py` is a compatibility entry point for
+`evaluate.py`.
