@@ -17,5 +17,7 @@ __pycache__/
 *.log
 *.tmp
 
-# The previous experiment tree is kept outside this repository.
-yzx_test_old/
+# Keep legacy experiment source code, but never its generated artifacts.
+yzx_test_old/**/results*/
+yzx_test_old/**/cache/
+yzx_test_old/benchmarks/fastdllm_log/
