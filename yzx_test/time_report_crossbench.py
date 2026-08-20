@@ -17,9 +17,9 @@ CONFIG = {
             "timings_file": "benchmarks/fastdllm_log/huskyqa_timings.jsonl",
         },
         "iirc": {
-            "assignment": "q_q_q_q_q",
-            "planner_file": "benchmarks/iirc/iirc_plans_llada_now.json",
-            "results_dir": "iirc_test/results_1b_llada_now",
+            "assignment": "f_q_m",
+            "planner_file": "benchmarks/iirc/iirc_plans_llada.json",
+            "results_dir": "iirc_test/results_1b_llada",
             "timings_file": "benchmarks/fastdllm_log/iirc_timings.jsonl",
         },
     },

@@ -11,7 +11,7 @@ from build_subtask_benchmark import AGENTS, normalize_plan as normalize_standard
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "huskyqa_three_agents_recommend_five_calls_full_v3"
+FULL_PROMPT_VERSION = "huskyqa_full_v1"
 
 FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
 and JSON plan that you would produce under the original instructions. The only

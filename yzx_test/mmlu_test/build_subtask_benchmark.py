@@ -11,15 +11,16 @@ from prompt import planner_prompt
 
 
 AGENTS = ["knowledge_agent", "reasoning_agent", "elimination_agent"]
-PLANNER_PROMPT_VERSION = "mmlu_pro_three_parallel_perspectives_v1"
+PLANNER_PROMPT_VERSION = "mmlu_v1"
 
 # Edit these defaults directly before running.
 CONFIG = {
-    "input": "benchmarks/mmlu_pro/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu_pro/mmlu_pro_plans_llada.json",
-    "benchmark_output": "benchmarks/mmlu_pro/mmlu_pro_subtask_llada.json",
-    "planner_api_url": "http://10.137.144.97:7004/v1",
+    "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
+    "plans_output": "benchmarks/mmlu/mmlu_plans_llada.json",
+    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_llada.json",
+    "planner_api_url": "http://10.137.144.97:7005/v1",
     "planner_api_key": "empty",
+    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
     "timeout": 120,

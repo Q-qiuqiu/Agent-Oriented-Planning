@@ -11,7 +11,7 @@ from prompt import planner_prompt
 
 
 AGENTS = ["search_agent", "calculation_agent", "reasoning_agent"]
-PLANNER_PROMPT_VERSION = "huskyqa_three_agents_recommend_five_calls_v3"
+PLANNER_PROMPT_VERSION = "huskyqa_v1"
 
 
 def planner_prompt_for_model(model):

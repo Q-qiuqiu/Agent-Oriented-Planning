@@ -18,33 +18,34 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "mmlu_full_v1"
+FULL_PROMPT_VERSION = "iirc_compact_full_v2"
 FULL_PLANNER_PROMPT = planner_prompt.replace(
-    "Output only one valid JSON array containing exactly three tasks.",
-    "Produce the same three-task plan, but use the output structure below.",
+    "Output only one valid JSON array in this schema. This example shows two\nindependent evidence tasks followed by one synthesis task:",
+    "The PLAN_JSON block must contain the JSON plan in this schema. This example shows two\nindependent evidence tasks followed by one synthesis task:",
+    1,
 ).replace(
-    "Do not solve the question in the plan\nand do not output analysis, Markdown, or extra text.",
-    """Do not solve the question in the plan.
-
-PLANNING_REASONING
-Briefly explain why the three independent perspectives cover the question.
-Do not solve the question and do not place JSON in this section.
-END_PLANNING_REASONING
+    "- Do not output analysis, Markdown fences, comments, or text outside the array.",
+    """- Use the marked response format below instead of returning a bare array.
 
 PLAN_JSON
-[
-  {"id": 1, "task": "...", "agent": "knowledge_agent", "reason": "...", "dep": []},
-  {"id": 2, "task": "...", "agent": "reasoning_agent", "reason": "...", "dep": []},
-  {"id": 3, "task": "...", "agent": "elimination_agent", "reason": "...", "dep": []}
-]
-END_PLAN_JSON""",
+[the complete JSON plan required above]
+END_PLAN_JSON
+
+PLANNING_REASONING
+Explain why each independent task can run immediately, why each dependency is
+needed, and why any plan longer than five calls cannot be consolidated safely.
+Do not solve the question or introduce tasks not present in PLAN_JSON.
+END_PLANNING_REASONING
+
+Use each marker exactly once. Do not use Markdown fences.""",
+    1,
 )
 
 CONFIG = {
-    "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llada.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7006/v1",
+    "input": "benchmarks/iirc/iirc_dev_flat.json",
+    "plans_output": "benchmarks/iirc/iirc_plans_full_llada.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_full_llada.json",
+    "planner_api_url": "http://10.137.144.97:7007/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
@@ -52,24 +53,26 @@ CONFIG = {
     "timeout": 600,
     "limit": None,
     "retry_missing_reasoning": False,
+    "agents": AGENTS,
 }
 
 
 def request_completion(query, config):
-    headers = {"Content-Type": "application/json", **auth_header(config["planner_api_key"])}
-    payload = {
-        "model": config["planner_model"],
-        "messages": [
-            {"role": "system", "content": FULL_PLANNER_PROMPT},
-            {"role": "user", "content": query},
-        ],
-        "temperature": config["planner_temperature"],
-        "max_tokens": config["planner_max_tokens"],
-    }
     response = requests.post(
         chat_completions_url(config["planner_api_url"]),
-        headers=headers,
-        json=payload,
+        headers={
+            "Content-Type": "application/json",
+            **auth_header(config["planner_api_key"]),
+        },
+        json={
+            "model": config["planner_model"],
+            "messages": [
+                {"role": "system", "content": FULL_PLANNER_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            "temperature": config["planner_temperature"],
+            "max_tokens": config["planner_max_tokens"],
+        },
         timeout=config["timeout"],
     )
     if not response.ok:
@@ -101,7 +104,7 @@ def extract_reasoning(text):
     if not start:
         return None
     tail = text[start.end():]
-    end = re.search(r"(?m)^\s*(?:END_PLANNING_REASONING|PLAN_JSON)\s*:?[ \t]*$", tail)
+    end = re.search(r"(?m)^\s*END_PLANNING_REASONING\s*$", tail)
     if not end:
         return None
     return tail[: end.start()].strip() or None
@@ -114,6 +117,14 @@ def save_json(path, value):
     with temporary.open("w", encoding="utf-8") as file:
         json.dump(value, file, ensure_ascii=False, indent=2)
     os.replace(temporary, output)
+
+
+def ordered_records(records_by_index, queries):
+    return [
+        records_by_index[row["source_index"]]
+        for row in queries
+        if row["source_index"] in records_by_index
+    ]
 
 
 def build_plans(queries, config):
@@ -129,27 +140,37 @@ def build_plans(queries, config):
         and row.get("planner_prompt_version") == FULL_PROMPT_VERSION
         and (not config["retry_missing_reasoning"] or row.get("planning_reasoning"))
     }
+    if existing:
+        print(
+            f"resume | loaded={len(existing)} | completed={len(done)} "
+            f"| prompt_version={FULL_PROMPT_VERSION}",
+            flush=True,
+        )
+
     selected = queries[: config["limit"]] if config["limit"] else queries
-    for query in selected:
-        if query["source_index"] in done:
+    for row in selected:
+        if row["source_index"] in done:
             continue
-        raw = None
+        raw_output = None
         started = time.perf_counter()
         record = {
-            "source": "TIGER-Lab/MMLU-Pro",
-            **query,
+            **row,
             "planner_model": config["planner_model"],
-            "planner_mode": "reasoning_then_json",
+            "planner_mode": "plan_json_then_reasoning",
             "planner_prompt_version": FULL_PROMPT_VERSION,
         }
+        record.pop("planner_input", None)
         try:
-            raw = request_completion(query["query"], config)
-            reasoning = extract_reasoning(raw)
+            raw_output = request_completion(row["planner_input"], config)
+            reasoning = extract_reasoning(raw_output)
+            plan = normalize_plan(extract_json_array(raw_output))
             record.update(
                 {
                     "planning_reasoning": reasoning,
-                    "raw_plan": raw,
-                    "plan": normalize_plan(extract_json_array(raw)),
+                    "raw_plan": raw_output,
+                    "plan": plan,
+                    "plan_call_count": len(plan),
+                    "exceeds_recommended_calls": len(plan) > 5,
                     "format_warnings": [] if reasoning else ["missing planning reasoning"],
                     "error": None,
                 }
@@ -157,39 +178,47 @@ def build_plans(queries, config):
         except Exception as exc:
             record.update(
                 {
-                    "planning_reasoning": extract_reasoning(raw) if raw else None,
-                    "raw_plan": raw,
+                    "planning_reasoning": extract_reasoning(raw_output) if raw_output else None,
+                    "raw_plan": raw_output,
                     "plan": None,
+                    "plan_call_count": None,
+                    "exceeds_recommended_calls": False,
                     "error": str(exc),
                 }
             )
         record["time"] = time.perf_counter() - started
-        by_index[query["source_index"]] = record
-        save_json(config["plans_output"], list(by_index.values()))
+        by_index[row["source_index"]] = record
+        save_json(config["plans_output"], ordered_records(by_index, queries))
         print(
-            f"planned {query['source_index']} | reasoning_chars="
+            f"planned {row['source_index']} | reasoning_chars="
             f"{len(record.get('planning_reasoning') or '')} "
             f"| subtasks={len(record.get('plan') or [])} | error={record['error']}",
             flush=True,
         )
-    return list(by_index.values())
+    return ordered_records(by_index, queries)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build MMLU-Pro full plans.")
+    parser = argparse.ArgumentParser(description="Build IIRC full plans.")
     parser.add_argument("--input", default=CONFIG["input"])
     parser.add_argument("--plans-output", default=CONFIG["plans_output"])
     parser.add_argument("--benchmark-output", default=CONFIG["benchmark_output"])
     parser.add_argument("--planner-api-url", default=CONFIG["planner_api_url"])
+    parser.add_argument("--planner-api-key", default=CONFIG["planner_api_key"])
     parser.add_argument("--planner-model", default=CONFIG["planner_model"])
+    parser.add_argument("--planner-temperature", type=float, default=CONFIG["planner_temperature"])
     parser.add_argument("--planner-max-tokens", type=int, default=CONFIG["planner_max_tokens"])
+    parser.add_argument("--timeout", type=int, default=CONFIG["timeout"])
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
+    parser.add_argument("--agents", nargs="+", choices=AGENTS, default=CONFIG["agents"])
     args = parser.parse_args()
+
     config = dict(CONFIG)
     config.update(vars(args))
-    plans = build_plans(load_queries(config["input"]), config)
+    queries = load_queries(config["input"])
+    plans = build_plans(queries, config)
     save_json(config["plans_output"], plans)
-    benchmark = expand_plans(plans, AGENTS)
+    benchmark = expand_plans(plans, config["agents"])
     save_json(config["benchmark_output"], benchmark)
     print(f"Saved plans: {config['plans_output']} ({len(plans)} queries)")
     print(f"Saved benchmark: {config['benchmark_output']} ({len(benchmark)} rows)")
