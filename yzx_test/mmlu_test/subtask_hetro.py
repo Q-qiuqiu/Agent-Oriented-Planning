@@ -11,8 +11,8 @@ from openai_compat import run_chat_completion
 
 # Assignment order: knowledge_agent, reasoning_agent, elimination_agent.
 MODEL_SIZE = "1b"
-AGENT_ASSIGNMENT = "q_qm_m"
-PLAN_VARIANT = "llada"
+AGENT_ASSIGNMENT = "s_s_s"
+PLAN_VARIANT = "full_llada"
 
 AGENT_ORDER = ("knowledge_agent", "reasoning_agent", "elimination_agent")
 MODEL_PRESETS = {
@@ -69,7 +69,7 @@ AGENT_CONFIG = build_agent_config(MODEL_SIZE, AGENT_ASSIGNMENT)
 RESULTS_DIR = f"mmlu_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 CONFIG = {
     "mode": "respond",
-    "plans": f"benchmarks/mmlu_pro/mmlu_pro_plans_{PLAN_VARIANT}.json",
+    "plans": f"benchmarks/mmlu/mmlu_plans_{PLAN_VARIANT}.json",
     "responses": f"{RESULTS_DIR}/subtask_hetro_responses_{AGENT_ASSIGNMENT}.json",
     "output": f"{RESULTS_DIR}/subtask_hetro_scores_{AGENT_ASSIGNMENT}.json",
     "limit": None,
@@ -209,7 +209,7 @@ def execute_plans(plans, output_path, limit=None, force=False, retry_errors=True
     return list(by_index.values())
 
 
-def score_records(records):
+def judge_records(records):
     rows = []
     for record in records:
         for step in record.get("steps", []):
@@ -222,22 +222,59 @@ def score_records(records):
                     "answer": record.get("answer"),
                 }
             )
-    return {"rows": rows, "summary": accuracy_summary(rows)}
+    overall = accuracy_summary(rows)
+    by_agent = {}
+    for agent in AGENT_ORDER:
+        agent_summary = accuracy_summary(
+            [row for row in rows if row.get("agent") == agent]
+        )
+        by_agent[agent] = {
+            "count": agent_summary["count"],
+            "correct": agent_summary["correct"],
+            "accuracy": agent_summary["accuracy"],
+            "parse_failure_count": agent_summary["parse_failure_count"],
+        }
+
+    summary = {
+        "by_agent": by_agent,
+        "by_category": overall["by_category"],
+        "prediction_distribution": overall["prediction_distribution"],
+        "count": overall["count"],
+        "correct": overall["correct"],
+        "accuracy": overall["accuracy"],
+        "parse_failure_count": overall["parse_failure_count"],
+    }
+    return {"rows": rows, "summary": summary}
 
 
 def main():
+    global AGENT_CONFIG
+
     parser = argparse.ArgumentParser(
         description="Run the three MMLU-Pro sub-agents concurrently with heterogeneous APIs."
     )
-    parser.add_argument("--mode", choices=["respond", "score", "all"], default=CONFIG["mode"])
+    parser.add_argument("--mode", choices=["respond", "judge", "all"], default=CONFIG["mode"])
+    parser.add_argument(
+        "--assignment",
+        default=AGENT_ASSIGNMENT,
+        help="Model aliases in knowledge_reasoning_elimination order (for example: g_q_l).",
+    )
     parser.add_argument("--plans", default=CONFIG["plans"])
-    parser.add_argument("--responses", default=CONFIG["responses"])
-    parser.add_argument("--output", default=CONFIG["output"])
+    parser.add_argument("--responses", default=None)
+    parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
 
-    print(f"Model assignment: size={MODEL_SIZE} | {AGENT_ASSIGNMENT}")
+    AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
+    args.responses = args.responses or (
+        f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
+    )
+    args.output = args.output or (
+        f"{RESULTS_DIR}/subtask_hetro_scores_{args.assignment}.json"
+    )
+
+    print(f"Model assignment: size={MODEL_SIZE} | {args.assignment}")
     for agent in AGENT_ORDER:
         config = AGENT_CONFIG[agent]
         print(f"  {agent}: {config['alias']} | {config['model']} | {config['api_url']}")
@@ -251,12 +288,12 @@ def main():
             plans, args.responses, args.limit, args.force, CONFIG["retry_errors"]
         )
         print(f"Saved responses to {args.responses}")
-    if args.mode in {"score", "all"}:
+    if args.mode in {"judge", "all"}:
         records = records or load_json(args.responses, []) or []
-        result = score_records(records)
+        result = judge_records(records)
         save_json(args.output, result)
         print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
-        print(f"Saved subtask scores to {args.output}")
+        print(f"Saved judged subtask scores to {args.output}")
 
 
 if __name__ == "__main__":

@@ -230,13 +230,21 @@ def main():
     parser = argparse.ArgumentParser(
         description="Score summarized final answers with the original CompareGPT prompt."
     )
-    parser.add_argument("--input", default=CONFIG["input"])
+    parser.add_argument(
+        "--assignment",
+        default=AGENT_ASSIGNMENT,
+        help="Model assignment suffix used by summary_evaluate.py (for example: g_q_l).",
+    )
+    parser.add_argument("--input", default=None)
     parser.add_argument("--query", default=CONFIG["query"])
     parser.add_argument("--source-index", default=CONFIG["source_index"])
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
-    parser.add_argument("--output", default=CONFIG["output"])
+    parser.add_argument("--output", default=None)
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
+
+    args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
+    args.output = args.output or f"{RESULTS_DIR}/summary_score_{args.assignment}.json"
 
     records = load_json(args.input, []) or []
     records = select_records(records, args.query, args.source_index, args.limit)

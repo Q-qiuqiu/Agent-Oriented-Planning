@@ -42,11 +42,16 @@ with `Final answer: X`.
    python3 mmlu_test/evaluate_agent_fit.py --mode all
    ```
 
+   Use `--mode judge` to compute offline exact-match role scores from saved
+   responses. This mode does not call an external judge model.
+
 4. Execute heterogeneous role models in parallel:
 
    ```bash
    python3 mmlu_test/subtask_hetro.py --mode all
    ```
+
+   Use `--mode judge` to score saved sub-agent options without rerunning them.
 
 5. Produce one final answer from the three saved responses:
 

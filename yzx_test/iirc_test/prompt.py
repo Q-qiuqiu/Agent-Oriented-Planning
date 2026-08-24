@@ -108,13 +108,10 @@ Return a concise evidence-based conclusion followed by a direct final answer.
 
 summarization_agent_prompt = """Produce the final answer to the original IIRC question from the saved subtask results. Preserve the reasoning agent's supported conclusion, check it against the extracted and retrieved evidence, and answer concisely. If the evidence is genuinely insufficient, return `not enough information`.
 
-Original query and initial context:
+Original query:
 %s
 
-Plan:
-%s
-
-Subtask answers:
+Subtask results:
 %s
 
 Final answer:

@@ -5,6 +5,10 @@ from collections import Counter
 CHOICES = "ABCDEFGHIJ"
 
 
+def is_valid_choice(value):
+    return isinstance(value, str) and value in CHOICES
+
+
 def extract_answer_choice(text):
     if not isinstance(text, str) or not text.strip():
         return None
@@ -27,7 +31,7 @@ def extract_answer_choice(text):
 
 
 def accuracy_summary(rows, prediction_field="predicted_answer"):
-    valid = [row for row in rows if row.get("answer") in CHOICES]
+    valid = [row for row in rows if is_valid_choice(row.get("answer"))]
     correct = [
         row
         for row in valid
@@ -53,7 +57,7 @@ def accuracy_summary(rows, prediction_field="predicted_answer"):
         "correct": len(correct),
         "accuracy": len(correct) / len(valid) if valid else 0.0,
         "parse_failure_count": sum(
-            row.get(prediction_field) not in CHOICES for row in valid
+            not is_valid_choice(row.get(prediction_field)) for row in valid
         ),
         "prediction_distribution": dict(sorted(predictions.items(), key=lambda item: str(item[0]))),
         "by_category": by_category,

@@ -551,7 +551,7 @@ def judge_rows(response_records, output_path, force=False):
 
 def print_run_config(args):
     print(
-        f"Model assignment | size={MODEL_SIZE} | name={AGENT_ASSIGNMENT} "
+        f"Model assignment | size={MODEL_SIZE} | name={args.assignment} "
         f"| order={','.join(AGENT_ORDER)}",
         flush=True,
     )
@@ -568,16 +568,32 @@ def print_run_config(args):
 
 
 def main():
+    global AGENT_CONFIG
+
     parser = argparse.ArgumentParser(
         description="Execute planner-selected subtasks with heterogeneous agent APIs, then judge offline results."
     )
     parser.add_argument("--mode", choices=["respond", "judge", "all"], default=CONFIG["mode"])
+    parser.add_argument(
+        "--assignment",
+        default=AGENT_ASSIGNMENT,
+        help="Model aliases in search_calculation_reasoning order (for example: g_q_l).",
+    )
     parser.add_argument("--plans", default=CONFIG["plans"])
-    parser.add_argument("--responses", default=CONFIG["responses"])
-    parser.add_argument("--output", default=CONFIG["output"])
+    parser.add_argument("--responses", default=None)
+    parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
+
+    AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
+    CONFIG["search_cache_path"] = search_cache_path_for_agent_config()
+    args.responses = args.responses or (
+        f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
+    )
+    args.output = args.output or (
+        f"{RESULTS_DIR}/subtask_hetro_scores_{args.assignment}.json"
+    )
     print_run_config(args)
 
     plans = load_json(args.plans, []) or []

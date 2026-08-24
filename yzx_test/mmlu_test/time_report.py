@@ -7,10 +7,10 @@ from pathlib import Path
 
 # Change only these values for a result family.
 MODEL_SIZE = "1b"
-PLAN_VARIANT = "llada"
-ASSIGNMENTS = ["q_qm_m"]
+PLAN_VARIANT = "full_llada"
+ASSIGNMENTS = ["g_q_l"]
 CONFIG = {
-    "plans": f"benchmarks/mmlu_pro/mmlu_pro_plans_{PLAN_VARIANT}.json",
+    "plans": f"benchmarks/mmlu/mmlu_plans_{PLAN_VARIANT}.json",
     "results_dir": f"mmlu_test/results_{MODEL_SIZE}_{PLAN_VARIANT}",
 }
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Edit these defaults directly before running the script.
 CONFIG = {
-    "plans": "benchmarks/mmlu_pro/mmlu_pro_plans_llada.json",
+    "plans": "benchmarks/mmlu/mmlu_plans_full_llada.json",
     "device_counts": [1, 2, 3],
     "summary_output": "mmlu_test/results/device_collision_summary_lru.json",
 }

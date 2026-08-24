@@ -12,6 +12,7 @@ MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
 PLAN_VARIANT = "llada"
 RESULTS_DIR = f"huskyqa_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
+SUMMARY_PROMPT_VERSION = "huskyqa_compact_summary_v2"
 
 # Edit API settings directly before running.
 CONFIG = {
@@ -78,14 +79,24 @@ def response_signature(record):
 
 
 def build_summary_prompt(record):
-    tasks = [step.get("task") for step in record.get("steps", [])]
-    responses = [
-        step.get("response")
-        if step.get("response") is not None
-        else f"[ERROR] {step.get('error') or 'missing response'}"
+    results = [
+        {
+            "id": step.get("id"),
+            "agent": step.get("agent"),
+            "task": step.get("task"),
+            "dep": step.get("dep") or [],
+            "response": (
+                step.get("response")
+                if step.get("response") is not None
+                else f"[ERROR] {step.get('error') or 'missing response'}"
+            ),
+        }
         for step in record.get("steps", [])
     ]
-    return summarization_agent_prompt % (record["query"], tasks, responses)
+    return summarization_agent_prompt % (
+        record["query"],
+        json.dumps(results, ensure_ascii=False, separators=(",", ":")),
+    )
 
 
 def summarize_responses(records, output_path, force=False):
@@ -103,6 +114,7 @@ def summarize_responses(records, output_path, force=False):
         if (
             previous
             and previous.get("response_signature") == signature
+            and previous.get("summary_prompt_version") == SUMMARY_PROMPT_VERSION
             and previous.get("final_answer") is not None
             and not force
         ):
@@ -115,6 +127,7 @@ def summarize_responses(records, output_path, force=False):
             "query": record["query"],
             "answer": record.get("answer"),
             "planner_model": record.get("planner_model"),
+            "summary_prompt_version": SUMMARY_PROMPT_VERSION,
             "response_signature": signature,
             "subtasks": [
                 {
@@ -168,13 +181,23 @@ def main():
     parser = argparse.ArgumentParser(
         description="Summarize saved heterogeneous sub-agent responses into final answers."
     )
-    parser.add_argument("--responses", default=CONFIG["responses"])
+    parser.add_argument(
+        "--assignment",
+        default=AGENT_ASSIGNMENT,
+        help="Model assignment suffix used by subtask_hetro.py (for example: g_q_l).",
+    )
+    parser.add_argument("--responses", default=None)
     parser.add_argument("--query", default=CONFIG["query"])
     parser.add_argument("--source-index", default=CONFIG["source_index"])
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
-    parser.add_argument("--output", default=CONFIG["output"])
+    parser.add_argument("--output", default=None)
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
+
+    args.responses = args.responses or (
+        f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
+    )
+    args.output = args.output or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
 
     records = load_json(args.responses, []) or []
     records = select_records(records, args.query, args.source_index, args.limit)

@@ -11,7 +11,7 @@ from build_subtask_benchmark import AGENTS, normalize_plan as normalize_standard
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "huskyqa_full_v1"
+FULL_PROMPT_VERSION = "huskyqa_full_reasoning_first_v2"
 
 FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
 and JSON plan that you would produce under the original instructions. The only
@@ -37,26 +37,51 @@ PLAN_JSON
 END_PLAN_JSON
 """
 
-FULL_PLANNER_PROMPT = planner_prompt.replace(
-    "Output only one valid JSON array in this exact schema:",
-    "The PLAN_JSON array must use this exact schema:",
-    1,
+
+def remove_json_example(prompt, introduction):
+    if introduction not in prompt:
+        raise ValueError("HuskyQA planner prompt JSON introduction was not found")
+    prefix, remainder = prompt.split(introduction, 1)
+    array_start = None
+    array_end = None
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\[", remainder):
+        try:
+            value, end = decoder.raw_decode(remainder[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+            array_start = match.start()
+            array_end = end
+            break
+    if array_start is None:
+        raise ValueError("HuskyQA planner prompt JSON example was not found")
+    before_example = remainder[:array_start]
+    suffix = remainder[array_start + array_end:]
+    return f"{prefix.rstrip()}\n\n{before_example.strip()}\n{suffix.strip()}"
+
+
+BASE_FULL_INSTRUCTIONS = remove_json_example(
+    planner_prompt,
+    "Output only one valid JSON array in this exact schema. This example shows two\n"
+    "independent retrievals followed by one consolidated calculation:",
 ).replace(
     "- Do not include analysis, markdown fences, comments, or text outside the array.",
-    FULL_OUTPUT_BLOCK,
-    1,
+    "- Follow the marked response format below exactly.",
 )
+
+FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + "\n\n" + FULL_OUTPUT_BLOCK
 
 
 # Edit these defaults directly before running the script.
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
-    "plans_output": "benchmarks/huskyqa/huskyqa_plans_full_llada.json",
-    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7004/v1",
+    "plans_output": "benchmarks/huskyqa/huskyqa_plans_full_llama3.json",
+    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_full_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
-    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
-    "planner_model": "/data/labshare/Param/llada",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,

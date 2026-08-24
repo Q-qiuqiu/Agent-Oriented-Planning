@@ -18,13 +18,43 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "mmlu_full_v1"
-FULL_PLANNER_PROMPT = planner_prompt.replace(
+FULL_PROMPT_VERSION = "mmlu_full_reasoning_first_v2"
+
+
+def remove_json_example(prompt, introduction):
+    if introduction not in prompt:
+        raise ValueError("MMLU planner prompt JSON introduction was not found")
+    prefix, remainder = prompt.split(introduction, 1)
+    array_start = None
+    array_end = None
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\[", remainder):
+        try:
+            value, end = decoder.raw_decode(remainder[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+            array_start = match.start()
+            array_end = end
+            break
+    if array_start is None:
+        raise ValueError("MMLU planner prompt JSON example was not found")
+    before_example = remainder[:array_start]
+    suffix = remainder[array_start + array_end:]
+    return f"{prefix.rstrip()}\n\n{before_example.strip()}\n{suffix.strip()}"
+
+
+BASE_FULL_INSTRUCTIONS = remove_json_example(
+    planner_prompt,
     "Output only one valid JSON array containing exactly three tasks.",
-    "Produce the same three-task plan, but use the output structure below.",
 ).replace(
     "Do not solve the question in the plan\nand do not output analysis, Markdown, or extra text.",
-    """Do not solve the question in the plan.
+    "Do not solve the question in the plan.",
+)
+
+FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + """
+
+Produce the same three-task plan, but use the output structure below.
 
 PLANNING_REASONING
 Briefly explain why the three independent perspectives cover the question.
@@ -37,16 +67,17 @@ PLAN_JSON
   {"id": 2, "task": "...", "agent": "reasoning_agent", "reason": "...", "dep": []},
   {"id": 3, "task": "...", "agent": "elimination_agent", "reason": "...", "dep": []}
 ]
-END_PLAN_JSON""",
-)
+END_PLAN_JSON
+"""
 
 CONFIG = {
     "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llada.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llada.json",
+    "plans_output": "benchmarks/mmlu/mmlu_plans_reasonplan_llada.json",
+    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_reasonplan_llada.json",
     "planner_api_url": "http://10.137.144.97:7006/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llada",
+    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,

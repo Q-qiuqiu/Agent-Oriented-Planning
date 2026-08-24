@@ -10,9 +10,10 @@ from prompt import summarization_agent_prompt
 
 # Keep these values aligned with subtask_hetro.py.
 MODEL_SIZE = "1b"
-AGENT_ASSIGNMENT = "q_qm_m"
-PLAN_VARIANT = "llada"
+AGENT_ASSIGNMENT = "l_l_l"
+PLAN_VARIANT = "full_llada"
 RESULTS_DIR = f"mmlu_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
+SUMMARY_PROMPT_VERSION = "mmlu_compact_summary_v2"
 
 CONFIG = {
     "responses": f"{RESULTS_DIR}/subtask_hetro_responses_{AGENT_ASSIGNMENT}.json",
@@ -22,9 +23,11 @@ CONFIG = {
     "limit": None,
     "force": False,
     "retry_errors": True,
-    "summary_api_url": "http://10.137.144.97:7007/v1",
+    "summary_api_url": "http://10.137.144.95:7004/v1",
     "summary_api_key": "empty",
-    "summary_model": "/data/labshare/Param/llada",
+    #"summary_model": "/data/labshare/Param/llada",
+    "summary_model": "/mnt/home/yzx/models/LLADA/",
+
     "summary_temperature": 0.0,
     "summary_timeout": 120,
 }
@@ -67,19 +70,8 @@ def response_signature(record):
 
 
 def build_summary_prompt(record):
-    plan = [
-        {
-            "id": step.get("id"),
-            "agent": step.get("agent"),
-            "task": step.get("task"),
-            "reason": step.get("reason"),
-            "dep": step.get("dep") or [],
-        }
-        for step in record.get("steps", [])
-    ]
     responses = [
         {
-            "id": step.get("id"),
             "agent": step.get("agent"),
             "response": step.get("response"),
         }
@@ -87,8 +79,7 @@ def build_summary_prompt(record):
     ]
     return summarization_agent_prompt % (
         record["query"],
-        json.dumps(plan, ensure_ascii=False, indent=2),
-        json.dumps(responses, ensure_ascii=False, indent=2),
+        json.dumps(responses, ensure_ascii=False, separators=(",", ":")),
     )
 
 
@@ -114,6 +105,7 @@ def summarize(records, output_path, force=False, retry_errors=True):
         if (
             previous
             and previous.get("response_signature") == signature
+            and previous.get("summary_prompt_version") == SUMMARY_PROMPT_VERSION
             and previous.get("summary_error") is None
             and previous.get("final_answer")
             and not force
@@ -133,6 +125,7 @@ def summarize(records, output_path, force=False, retry_errors=True):
             "answer": record.get("answer"),
             "answer_index": record.get("answer_index"),
             "planner_model": record.get("planner_model"),
+            "summary_prompt_version": SUMMARY_PROMPT_VERSION,
             "response_signature": signature,
             "subtasks": record.get("steps", []),
         }
@@ -192,13 +185,23 @@ def main():
     parser = argparse.ArgumentParser(
         description="Summarize three independent MMLU-Pro agent responses."
     )
-    parser.add_argument("--responses", default=CONFIG["responses"])
-    parser.add_argument("--output", default=CONFIG["output"])
+    parser.add_argument(
+        "--assignment",
+        default=AGENT_ASSIGNMENT,
+        help="Model assignment suffix used by subtask_hetro.py (for example: g_q_l).",
+    )
+    parser.add_argument("--responses", default=None)
+    parser.add_argument("--output", default=None)
     parser.add_argument("--query", default=CONFIG["query"])
     parser.add_argument("--source-index", default=CONFIG["source_index"])
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
+
+    args.responses = args.responses or (
+        f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
+    )
+    args.output = args.output or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
 
     records = select_records(
         load_json(args.responses, []) or [], args.query, args.source_index, args.limit

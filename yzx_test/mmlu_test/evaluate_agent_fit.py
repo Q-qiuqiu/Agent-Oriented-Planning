@@ -159,7 +159,7 @@ def summarize(rows):
     return dict(by_model)
 
 
-def score_responses(responses_path, output_path):
+def judge_responses(responses_path, output_path):
     rows = load_json(responses_path, []) or []
     result = {"rows": rows, "summary": summarize(rows)}
     save_json(output_path, result)
@@ -170,7 +170,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Evaluate local models as the three independent MMLU-Pro agents."
     )
-    parser.add_argument("--mode", choices=["respond", "score", "all"], default=CONFIG["mode"])
+    parser.add_argument("--mode", choices=["respond", "judge", "all"], default=CONFIG["mode"])
     parser.add_argument("--models", nargs="+", default=CONFIG["models"])
     parser.add_argument("--agents", nargs="+", choices=AGENTS, default=CONFIG["agents"])
     parser.add_argument("--benchmarks", default=CONFIG["benchmarks"])
@@ -189,10 +189,10 @@ def main():
         execute_rows(benchmarks, args.models, args.agents, args.responses, config)
         print(f"Saved responses to {args.responses}")
 
-    if args.mode in {"score", "all"}:
-        result = score_responses(args.responses, args.output)
+    if args.mode in {"judge", "all"}:
+        result = judge_responses(args.responses, args.output)
         print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
-        print(f"Saved scores to {args.output}")
+        print(f"Saved judged scores to {args.output}")
 
 
 if __name__ == "__main__":

@@ -110,9 +110,7 @@ Answer:
 summarization_agent_prompt = """Use the subtask answers to produce the final answer to the original query. Resolve the dependencies, preserve important values and units, and answer the query directly. Do not mention the agent workflow.
 
 Original query: %s
-Plan:
-%s
-Subtask answers:
+Subtask results:
 %s
 
 Final answer:

@@ -18,18 +18,42 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "iirc_compact_full_v2"
-FULL_PLANNER_PROMPT = planner_prompt.replace(
-    "Output only one valid JSON array in this schema. This example shows two\nindependent evidence tasks followed by one synthesis task:",
-    "The PLAN_JSON block must contain the JSON plan in this schema. This example shows two\nindependent evidence tasks followed by one synthesis task:",
-    1,
+FULL_PROMPT_VERSION = "iirc_compact_full_reasoning_first_v4"
+
+
+def remove_json_example(prompt, introduction):
+    if introduction not in prompt:
+        raise ValueError("IIRC planner prompt JSON introduction was not found")
+    prefix, remainder = prompt.split(introduction, 1)
+    array_start = None
+    array_end = None
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\[", remainder):
+        try:
+            value, end = decoder.raw_decode(remainder[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
+            array_start = match.start()
+            array_end = end
+            break
+    if array_start is None:
+        raise ValueError("IIRC planner prompt JSON example was not found")
+    before_example = remainder[:array_start]
+    suffix = remainder[array_start + array_end:]
+    return f"{prefix.rstrip()}\n\n{before_example.strip()}\n{suffix.strip()}"
+
+
+BASE_FULL_INSTRUCTIONS = remove_json_example(
+    planner_prompt,
+    "Output only one valid JSON array in this schema. This example shows two\n"
+    "independent evidence tasks followed by one synthesis task:",
 ).replace(
     "- Do not output analysis, Markdown fences, comments, or text outside the array.",
-    """- Use the marked response format below instead of returning a bare array.
+    "- Follow the marked response format below exactly.",
+)
 
-PLAN_JSON
-[the complete JSON plan required above]
-END_PLAN_JSON
+FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + """
 
 PLANNING_REASONING
 Explain why each independent task can run immediately, why each dependency is
@@ -37,17 +61,25 @@ needed, and why any plan longer than five calls cannot be consolidated safely.
 Do not solve the question or introduce tasks not present in PLAN_JSON.
 END_PLANNING_REASONING
 
-Use each marker exactly once. Do not use Markdown fences.""",
-    1,
-)
+PLAN_JSON
+[
+  {"id": 1, "task": "...", "agent": "context_agent", "reason": "...", "dep": []},
+  {"id": 2, "task": "...", "agent": "retrieval_agent", "reason": "...", "dep": []},
+  {"id": 3, "task": "...", "agent": "reasoning_agent", "reason": "...", "dep": [1, 2]}
+]
+END_PLAN_JSON
+
+Use each marker exactly once. Do not use Markdown fences.
+"""
 
 CONFIG = {
     "input": "benchmarks/iirc/iirc_dev_flat.json",
-    "plans_output": "benchmarks/iirc/iirc_plans_full_llada.json",
-    "benchmark_output": "benchmarks/iirc/iirc_subtask_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7007/v1",
+    "plans_output": "benchmarks/iirc/iirc_plans_full_llama3.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_full_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
-    "planner_model": "/data/labshare/Param/llada",
+    #"planner_model": "/data/labshare/Param/llada",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,

@@ -19,9 +19,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="Score MMLU-Pro final answers by official option exact match."
     )
-    parser.add_argument("--input", default=CONFIG["input"])
-    parser.add_argument("--output", default=CONFIG["output"])
+    parser.add_argument(
+        "--assignment",
+        default=AGENT_ASSIGNMENT,
+        help="Model assignment suffix used by summary_evaluate.py (for example: g_q_l).",
+    )
+    parser.add_argument("--input", default=None)
+    parser.add_argument("--output", default=None)
     args = parser.parse_args()
+
+    args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
+    args.output = args.output or (
+        f"{RESULTS_DIR}/summary_evaluate_{args.assignment}.json"
+    )
 
     with Path(args.input).open("r", encoding="utf-8") as file:
         rows = json.load(file)

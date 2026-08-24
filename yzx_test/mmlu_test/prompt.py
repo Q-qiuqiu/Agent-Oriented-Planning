@@ -77,9 +77,6 @@ summarization_agent_prompt = """You are the final decision agent for an MMLU-Pro
 Question and options:
 %s
 
-Plan:
-%s
-
 Independent agent responses:
 %s
 
