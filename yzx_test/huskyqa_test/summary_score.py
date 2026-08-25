@@ -11,7 +11,7 @@ from prompt import evaluate_prompt
 # Keep these values aligned with subtask_hetro.py and summary_evaluate.py.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
-PLAN_VARIANT = "llada"
+PLAN_VARIANT = "full_llada"
 RESULTS_DIR = f"huskyqa_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 
 # Edit judge API settings directly before running.

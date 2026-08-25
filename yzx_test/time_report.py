@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 # HuskyQA workflow; five aliases select IIRC after it is migrated.
 CONFIG = {
     "assignments": [
-        "f_q_m",
+        "g_q_l",
         # "g_g_g_g_g",
         # "q_q_q_q",
         # "g_g_g_g",
@@ -19,30 +19,30 @@ CONFIG = {
             "role_count": 5,
             "planner_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
-                "iirc/iirc_plans_llada_now.json"
+                "iirc/iirc_plans_full_llada.json"
             ),
             "results_dir": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/"
-                "iirc_test/results_1b_llada_now"
+                "iirc_test/results_1b_full_llada"
             ),
             "timings_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
-                "fastdllm_log/iirc_timings.jsonl"
+                "fastdllm_log/iirc_full_timings.jsonl"
             ),
         },
         "huskyqa": {
             "role_count": 3,
             "planner_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
-                "huskyqa/huskyqa_plans_llama3.json"
+                "huskyqa/huskyqa_plans_full_llada.json"
             ),
             "results_dir": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/"
-                "huskyqa_test/results_1b_llama"
+                "huskyqa_test/results_1b_full_llada"
             ),
             "timings_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
-                "fastdllm_log/huskyqa_timings.jsonl"
+                "fastdllm_log/huskyqa_full_timings.jsonl"
             ),
         },
     },
@@ -50,7 +50,7 @@ CONFIG = {
         "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
         "fastdllm_log/model_start_time.json"
     ),
-    "device_counts": [2, 3, 4],
+    "device_counts": [3],
     # None means prefetch one useful model instance per available device.
     "prefetch_agent_limit": None,
     "prefetch_time_field": "decision_seconds",

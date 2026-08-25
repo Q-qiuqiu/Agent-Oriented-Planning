@@ -209,7 +209,12 @@ def main():
     if not records:
         raise ValueError("No subtask response records matched the selection")
     output = summarize(records, args.output, args.force, CONFIG["retry_errors"])
-    print(json.dumps(accuracy_summary(output), ensure_ascii=False, indent=2))
+    summary = accuracy_summary(output)
+    overall = {
+        key: summary[key]
+        for key in ("count", "correct", "accuracy", "parse_failure_count")
+    }
+    print(json.dumps(overall, ensure_ascii=False, indent=2))
     print(f"Saved {len(output)} summaries to {args.output}")
 
 

@@ -10,7 +10,7 @@ from prompt import summarization_agent_prompt
 # Keep these values aligned with subtask_hetro.py.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
-PLAN_VARIANT = "llada"
+PLAN_VARIANT = "full_llada"
 RESULTS_DIR = f"huskyqa_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 SUMMARY_PROMPT_VERSION = "huskyqa_compact_summary_v2"
 
@@ -22,10 +22,11 @@ CONFIG = {
     "limit": None,
     "output": f"{RESULTS_DIR}/summary_result_{AGENT_ASSIGNMENT}.json",
     "force": False,
-    "summary_api_url": "http://10.137.144.97:7007/v1",
+    "summary_api_url": "http://10.137.144.97:7006/v1",
     "summary_api_key": "empty",
     #"summary_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "summary_model": "/data/labshare/Param/llada",
+    #"summary_model": "/mnt/home/yzx/models/LLADA/",
     "summary_temperature": 0.0,
     "summary_timeout": 120,
 }

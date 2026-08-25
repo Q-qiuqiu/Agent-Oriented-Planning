@@ -102,7 +102,11 @@ set_model_conda_env() {
 #   gpu_memory_utilization tool_call_parser enable_auto_tool_choice
 #   enforce_eager "extra arguments"
 # ============================================================
-
+register_model \
+    "qwen3.8-27b" \
+    "/data/labshare/Param/Qwen/Qwen3.8-27B" \
+    "7000" "4" "32768" "0.9" \
+    "qwen3_coder" "true" "false" ""
 register_model \
     "qwen3-30b" \
     "/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507" \
@@ -114,7 +118,7 @@ register_model \
     "7002" "1" "8192" "0.8" \
     "hermes" "true" "false" ""
 register_fastdllm_server \
-    "llada" \
+    "llada3" \
     "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
     "7003" "1024" \
     "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
@@ -243,7 +247,6 @@ register_model \
 # Models not listed here use the currently active environment.
 # Left: model alias; right: Conda environment name.
 # ============================================================
-
 set_model_conda_env "hunyuan-1.8b" "vllm012"
 set_model_conda_env "minicpm3-4b" "minicpm3"
 set_model_conda_env "llada" "base"
@@ -251,7 +254,7 @@ set_model_conda_env "qwen2.5-math-1.5b" "base"
 set_model_conda_env "qwen2.5-coder-1.5b" "base"
 set_model_conda_env "internlm2.5-1.8b" "base"
 set_model_conda_env "smollm2-1.7b" "base"
-
+set_model_conda_env "qwen3.8-27b" "vllm0271"
 usage() {
     cat <<'USAGE'
 Usage:

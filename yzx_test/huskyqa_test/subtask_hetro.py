@@ -20,7 +20,7 @@ from prompt import scorer_prompt
 # 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
-PLAN_VARIANT = "llada"
+PLAN_VARIANT = "full_llada"
 
 AGENT_ORDER = (
     "search_agent",
@@ -190,7 +190,7 @@ CONFIG = {
     "retry_errors": True,
     "retry_empty_search_results": True,
     "search_backend": "cache_fallback",
-    "ddgs_proxy": "http://10.134.110.145:10808",
+    "ddgs_proxy": "http://10.134.77.71:10808",
     "ddgs_timeout": 30,
     "ddgs_retries": 3,
     "ddgs_region": "us-en",

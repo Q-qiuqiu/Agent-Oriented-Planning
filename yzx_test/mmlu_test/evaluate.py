@@ -9,8 +9,8 @@ from prompt import plan_detector_prompt
 
 
 CONFIG = {
-    "plans": "benchmarks/mmlu_pro/mmlu_pro_plans_llada.json",
-    "output": "mmlu_test/results/plan_evaluate_llada.json",
+    "plans": "benchmarks/mmlu/mmlu_plans_full_llada.json",
+    "output": "mmlu_test/results/plan_evaluate_full_llada.json",
     "source_index": None,
     "limit": None,
     "force": False,

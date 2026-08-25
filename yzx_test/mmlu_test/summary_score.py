@@ -7,7 +7,7 @@ from answer_utils import accuracy_summary, extract_answer_choice
 
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "q_qm_m"
-PLAN_VARIANT = "llada"
+PLAN_VARIANT = "full_llada"
 RESULTS_DIR = f"mmlu_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 CONFIG = {
     "input": f"{RESULTS_DIR}/summary_result_{AGENT_ASSIGNMENT}.json",
@@ -52,7 +52,11 @@ def main():
     with temporary.open("w", encoding="utf-8") as file:
         json.dump(result, file, ensure_ascii=False, indent=2)
     temporary.replace(output)
-    print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
+    overall = {
+        key: result["summary"][key]
+        for key in ("count", "correct", "accuracy", "parse_failure_count")
+    }
+    print(json.dumps(overall, ensure_ascii=False, indent=2))
     print(f"Saved exact-match evaluation to {args.output}")
 
 
