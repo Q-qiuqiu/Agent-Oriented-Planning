@@ -9,11 +9,11 @@ from prompt import plan_detector_prompt
 
 # Edit these values directly before running.
 CONFIG = {
-    "plans": "benchmarks/iirc/iirc_plans_full_llada.json",
+    "plans": "benchmarks/iirc/iirc_plans_full_llama3.json",
     "query": None,
     "source_index": None,
     "limit": None,
-    "output": "iirc_test/results/plan_evaluate_full_llada.json",
+    "output": "iirc_test/results/plan_evaluate_full_llama3.json",
     "force": False,
     "judge_api_url": "http://10.137.144.97:7001/v1",
     "judge_api_key": "empty",

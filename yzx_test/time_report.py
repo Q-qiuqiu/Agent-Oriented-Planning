@@ -45,6 +45,21 @@ CONFIG = {
                 "fastdllm_log/huskyqa_full_timings.jsonl"
             ),
         },
+        "mmlu": {
+            "role_count": 3,
+            "planner_file": (
+                "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
+                "mmlu/mmlu_plans_full_llada.json"
+            ),
+            "results_dir": (
+                "/data/home/yzx/Agent-Oriented-Planning/yzx_test/"
+                "mmlu_test/results_1b_full_llada"
+            ),
+            "timings_file": (
+                "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
+                "fastdllm_log/mmlu_full_timings.jsonl"
+            ),
+        },
     },
     "cold_start_file": (
         "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"

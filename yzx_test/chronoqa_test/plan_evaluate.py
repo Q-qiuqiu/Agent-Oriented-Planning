@@ -9,8 +9,8 @@ from prompt import plan_detector_prompt
 
 
 CONFIG = {
-    "plans": "benchmarks/mmlu/mmlu_plans_full_llada.json",
-    "output": "mmlu_test/results/plan_evaluate_full_llada.json",
+    "plans": "benchmarks/chronoqa/chronoqa_plans_full_llada.json",
+    "output": "chronoqa_test/results/plan_evaluate_full_llada.json",
     "source_index": None,
     "limit": None,
     "force": False,
@@ -109,7 +109,7 @@ def evaluate(records, output_path, force=False):
             "source": record.get("source"),
             "source_index": record.get("source_index"),
             "question_id": record.get("question_id"),
-            "category": record.get("category"),
+            "temporal_type": record.get("temporal_type"),
             "query": record.get("query"),
             "planner_model": record.get("planner_model"),
             "plan": record.get("plan"),
@@ -161,7 +161,7 @@ def evaluate(records, output_path, force=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate MMLU-Pro plan quality.")
+    parser = argparse.ArgumentParser(description="Evaluate ChronoQA plan quality.")
     parser.add_argument("--plans", default=CONFIG["plans"])
     parser.add_argument("--output", default=CONFIG["output"])
     parser.add_argument("--source-index", default=CONFIG["source_index"])

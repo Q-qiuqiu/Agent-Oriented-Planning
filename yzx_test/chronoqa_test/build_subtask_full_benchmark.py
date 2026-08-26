@@ -18,12 +18,12 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "mmlu_full_reasoning_first_v2"
+FULL_PROMPT_VERSION = "chronoqa_full_reasoning_first_v2"
 
 
 def remove_json_example(prompt, introduction):
     if introduction not in prompt:
-        raise ValueError("MMLU planner prompt JSON introduction was not found")
+        raise ValueError("ChronoQA planner prompt JSON introduction was not found")
     prefix, remainder = prompt.split(introduction, 1)
     array_start = None
     array_end = None
@@ -38,7 +38,7 @@ def remove_json_example(prompt, introduction):
             array_end = end
             break
     if array_start is None:
-        raise ValueError("MMLU planner prompt JSON example was not found")
+        raise ValueError("ChronoQA planner prompt JSON example was not found")
     before_example = remainder[:array_start]
     suffix = remainder[array_start + array_end:]
     return f"{prefix.rstrip()}\n\n{before_example.strip()}\n{suffix.strip()}"
@@ -46,38 +46,38 @@ def remove_json_example(prompt, introduction):
 
 BASE_FULL_INSTRUCTIONS = remove_json_example(
     planner_prompt,
-    "Output only one valid JSON array containing exactly three tasks.",
+    "只输出一个合法 JSON 数组，数组中必须恰好包含三个任务。",
 ).replace(
-    "Do not solve the question in the plan\nand do not output analysis, Markdown, or extra text.",
-    "Do not solve the question in the plan.",
+    "不要输出分析过程、Markdown 或任何额外文本。",
+    "不要在规划推理或计划中直接解答问题。",
 )
 
 FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + """
 
-Produce the same three-task plan, but use the output structure below.
+请生成相同的三个并行任务，但严格使用以下输出结构。
 
 PLANNING_REASONING
-Briefly explain why the three independent perspectives cover the question.
-Do not solve the question and do not place JSON in this section.
+请用中文简要说明为什么这三个独立视角能够覆盖当前问题。
+不要解答问题，也不要在此部分放置 JSON。
 END_PLANNING_REASONING
 
 PLAN_JSON
 [
-  {"id": 1, "task": "...", "agent": "knowledge_agent", "reason": "...", "dep": []},
-  {"id": 2, "task": "...", "agent": "reasoning_agent", "reason": "...", "dep": []},
-  {"id": 3, "task": "...", "agent": "elimination_agent", "reason": "...", "dep": []}
+  {"id": 1, "task": "...", "agent": "evidence_agent", "reason": "...", "dep": []},
+  {"id": 2, "task": "...", "agent": "temporal_agent", "reason": "...", "dep": []},
+  {"id": 3, "task": "...", "agent": "verification_agent", "reason": "...", "dep": []}
 ]
 END_PLAN_JSON
 """
 
 CONFIG = {
-    "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llada2.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llada2.json",
-    "planner_api_url": "http://10.137.144.97:7003/v1",
+    "input": "benchmarks/chronoqa/chronoqa_sampled.json",
+    "plans_output": "benchmarks/chronoqa/chronoqa_plans_full_llama3.json",
+    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_full_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
-    "planner_model": "/data/labshare/Param/llada",
-    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llada",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,
@@ -167,7 +167,7 @@ def build_plans(queries, config):
         raw = None
         started = time.perf_counter()
         record = {
-            "source": "TIGER-Lab/MMLU-Pro",
+            "source": "czy1999/ChronoQA",
             **query,
             "planner_model": config["planner_model"],
             "planner_mode": "reasoning_then_json",
@@ -207,7 +207,7 @@ def build_plans(queries, config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build MMLU-Pro full plans.")
+    parser = argparse.ArgumentParser(description="Build ChronoQA full plans.")
     parser.add_argument("--input", default=CONFIG["input"])
     parser.add_argument("--plans-output", default=CONFIG["plans_output"])
     parser.add_argument("--benchmark-output", default=CONFIG["benchmark_output"])

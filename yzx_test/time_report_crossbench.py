@@ -6,28 +6,53 @@ import time_report as timing
 
 ROOT = Path(__file__).resolve().parent
 
-# IIRC is split into contiguous partitions. Each run interleaves the complete
-# HuskyQA set with one IIRC partition, matching analyze_multi_colliosions.py.
+# Add future benchmarks to "benchmarks", then select and order them through
+# "arrival_pattern". Each tuple is (benchmark_name, queries_per_group).
 CONFIG = {
     "benchmarks": {
         "huskyqa": {
-            "assignment": "f_q_m",
-            "planner_file": "benchmarks/huskyqa/huskyqa_plans_llama3.json",
-            "results_dir": "huskyqa_test/results_1b_llama",
-            "timings_file": "benchmarks/fastdllm_log/huskyqa_timings.jsonl",
+            "display_name": "HuskyQA",
+            "assignment": "g_q_l",
+            "planner_file": "benchmarks/huskyqa/huskyqa_plans_full_llada.json",
+            "results_dir": "huskyqa_test/results_1b_full_llada",
+            "timings_file": "benchmarks/fastdllm_log/huskyqa_full_timings.jsonl",
         },
         "iirc": {
-            "assignment": "f_q_m",
-            "planner_file": "benchmarks/iirc/iirc_plans_llada.json",
-            "results_dir": "iirc_test/results_1b_llada",
-            "timings_file": "benchmarks/fastdllm_log/iirc_timings.jsonl",
+            "display_name": "IIRC",
+            "assignment": "g_q_l",
+            "planner_file": "benchmarks/iirc/iirc_plans_full_llada.json",
+            "results_dir": "iirc_test/results_1b_full_llada",
+            "timings_file": "benchmarks/fastdllm_log/iirc_full_timings.jsonl",
+        },
+        "mmlu": {
+            "display_name": "MMLU-Pro",
+            "assignment": "g_q_l",
+            "planner_file": "benchmarks/mmlu/mmlu_plans_full_llada.json",
+            "results_dir": "mmlu_test/results_1b_full_llada",
+            "timings_file": "benchmarks/fastdllm_log/mmlu_full_timings.jsonl",
+        },
+        "chronoqa": {
+            "display_name": "ChronoQA",
+            "assignment": "g_q_l",
+            "planner_file": "benchmarks/chronoqa/chronoqa_plans_full_llada.json",
+            "results_dir": "chronoqa_test/results_1b_full_llada",
+            "timings_file": "benchmarks/fastdllm_log/chronoqa_full_timings.jsonl",
         },
     },
-    # One group is H...H followed by I...I. Remaining queries continue in
-    # source order after one benchmark is exhausted.
-    "huskyqa_queries_per_group": 1,
-    "iirc_queries_per_group": 1,
-    "iirc_partitions": 5,
+    # One round of ("huskyqa", 1), ("iirc", 5), ("mmlu", 2) means:
+    # 1 HuskyQA -> 5 IIRC -> 2 MMLU. Rounds continue until all are exhausted.
+    # Remove an item to exclude that benchmark from this report.
+    "arrival_pattern": [
+        ("huskyqa", 1),
+        #("iirc", 1),
+        ("mmlu", 1),
+        # ("chronoqa", 1),
+    ],
+    # Usually leave this empty for one run over every complete benchmark.
+    # To reproduce the old five-run setup, use {"iirc": 5}; benchmarks with
+    # partition count 1 are repeated in full in each run. If several benchmarks
+    # are partitioned, they must use the same count.
+    "partition_counts": {},
     "device_counts": [2, 3, 4],
     "cold_start_file": "benchmarks/fastdllm_log/model_start_time.json",
     # None means prefetch one useful model instance per available device.
@@ -47,11 +72,13 @@ def validate_positive_integer(name, value):
         raise ValueError(f"CONFIG[{name!r}] must be a positive integer")
 
 
-def partition_entries(entries, partition_count):
-    validate_positive_integer("iirc_partitions", partition_count)
+def partition_entries(entries, partition_count, benchmark_name):
+    validate_positive_integer(
+        f"partition_counts[{benchmark_name!r}]", partition_count
+    )
     if partition_count > len(entries):
         raise ValueError(
-            "iirc_partitions cannot exceed IIRC query count: "
+            f"Partition count for {benchmark_name!r} cannot exceed its query count: "
             f"{partition_count} > {len(entries)}"
         )
 
@@ -66,28 +93,103 @@ def partition_entries(entries, partition_count):
     return partitions
 
 
-def interleave_entries(huskyqa_entries, iirc_entries, huskyqa_count, iirc_count):
-    validate_positive_integer("huskyqa_queries_per_group", huskyqa_count)
-    validate_positive_integer("iirc_queries_per_group", iirc_count)
-
+def interleave_entries(entries_by_benchmark, arrival_pattern):
     arrivals = []
-    huskyqa_index = 0
-    iirc_index = 0
-    while (
-        huskyqa_index < len(huskyqa_entries)
-        or iirc_index < len(iirc_entries)
+    positions = {name: 0 for name, _ in arrival_pattern}
+    while any(
+        positions[name] < len(entries_by_benchmark[name])
+        for name, _ in arrival_pattern
     ):
-        for _ in range(huskyqa_count):
-            if huskyqa_index >= len(huskyqa_entries):
-                break
-            arrivals.append(huskyqa_entries[huskyqa_index])
-            huskyqa_index += 1
-        for _ in range(iirc_count):
-            if iirc_index >= len(iirc_entries):
-                break
-            arrivals.append(iirc_entries[iirc_index])
-            iirc_index += 1
+        for name, queries_per_group in arrival_pattern:
+            entries = entries_by_benchmark[name]
+            start = positions[name]
+            end = min(start + queries_per_group, len(entries))
+            arrivals.extend(entries[start:end])
+            positions[name] = end
     return arrivals
+
+
+def validate_arrival_pattern(benchmark_configs):
+    raw_pattern = CONFIG.get("arrival_pattern")
+    if not isinstance(raw_pattern, (list, tuple)) or not raw_pattern:
+        raise ValueError("CONFIG['arrival_pattern'] must be a non-empty list")
+
+    pattern = []
+    seen = set()
+    for index, item in enumerate(raw_pattern):
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise ValueError(
+                "Each arrival_pattern item must be "
+                "(benchmark_name, queries_per_group)"
+            )
+        name, queries_per_group = item
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"arrival_pattern item {index} has no benchmark name")
+        name = name.strip()
+        if name not in benchmark_configs:
+            known = ", ".join(benchmark_configs)
+            raise ValueError(
+                f"Unknown benchmark {name!r} in arrival_pattern; configured: {known}"
+            )
+        if name in seen:
+            raise ValueError(f"Benchmark {name!r} appears more than once in arrival_pattern")
+        validate_positive_integer(
+            f"arrival_pattern[{index}].queries_per_group", queries_per_group
+        )
+        seen.add(name)
+        pattern.append((name, queries_per_group))
+
+    if len(pattern) < 2:
+        raise ValueError("Cross-benchmark reporting requires at least two benchmarks")
+    return pattern
+
+
+def build_arrival_runs(datasets, arrival_pattern):
+    configured_counts = CONFIG.get("partition_counts", {})
+    if not isinstance(configured_counts, dict):
+        raise ValueError("CONFIG['partition_counts'] must be a dictionary")
+
+    selected_names = {name for name, _ in arrival_pattern}
+    unknown_names = set(configured_counts) - selected_names
+    if unknown_names:
+        raise ValueError(
+            "partition_counts contains benchmarks not selected by arrival_pattern: "
+            + ", ".join(sorted(unknown_names))
+        )
+
+    partition_counts = {
+        name: configured_counts.get(name, 1)
+        for name, _ in arrival_pattern
+    }
+    for name, count in partition_counts.items():
+        validate_positive_integer(f"partition_counts[{name!r}]", count)
+
+    run_count = max(partition_counts.values())
+    incompatible = {
+        name: count
+        for name, count in partition_counts.items()
+        if count not in {1, run_count}
+    }
+    if incompatible:
+        raise ValueError(
+            "Every partition count must be 1 or the common maximum run count "
+            f"{run_count}; got {incompatible}"
+        )
+
+    partitions = {
+        name: partition_entries(datasets[name]["entries"], count, name)
+        for name, count in partition_counts.items()
+    }
+    runs = []
+    for run_index in range(run_count):
+        entries_by_benchmark = {
+            name: benchmark_partitions[
+                run_index if len(benchmark_partitions) > 1 else 0
+            ]
+            for name, benchmark_partitions in partitions.items()
+        }
+        runs.append(interleave_entries(entries_by_benchmark, arrival_pattern))
+    return runs, partitions
 
 
 def load_benchmark(name, config):
@@ -190,10 +292,15 @@ def average_run_summaries(summaries):
     if not summaries:
         raise ValueError("No run summaries to average")
     fields = ("count", "missing", "mean", "min", "max", "p95")
-    return {
-        field: sum(summary[field] for summary in summaries) / len(summaries)
-        for field in fields
-    }
+    averaged = {}
+    for field in fields:
+        values = [
+            summary[field]
+            for summary in summaries
+            if summary[field] is not None
+        ]
+        averaged[field] = sum(values) / len(values) if values else None
+    return averaged
 
 
 def format_number(value, precision):
@@ -244,12 +351,13 @@ def print_crossbench_table(title, rows, precision):
 
 def main():
     benchmark_configs = CONFIG["benchmarks"]
-    if set(benchmark_configs) != {"huskyqa", "iirc"}:
-        raise ValueError("CONFIG['benchmarks'] must contain huskyqa and iirc")
+    if not isinstance(benchmark_configs, dict) or not benchmark_configs:
+        raise ValueError("CONFIG['benchmarks'] must be a non-empty dictionary")
+    arrival_pattern = validate_arrival_pattern(benchmark_configs)
 
     datasets = {
-        name: load_benchmark(name, config)
-        for name, config in benchmark_configs.items()
+        name: load_benchmark(name, benchmark_configs[name])
+        for name, _ in arrival_pattern
     }
     cold_start_path = resolve_path(CONFIG["cold_start_file"])
     if not cold_start_path.exists():
@@ -269,19 +377,7 @@ def main():
     if prefetch_agent_limit is not None:
         validate_positive_integer("prefetch_agent_limit", prefetch_agent_limit)
 
-    partitions = partition_entries(
-        datasets["iirc"]["entries"],
-        CONFIG["iirc_partitions"],
-    )
-    runs = [
-        interleave_entries(
-            datasets["huskyqa"]["entries"],
-            partition,
-            CONFIG["huskyqa_queries_per_group"],
-            CONFIG["iirc_queries_per_group"],
-        )
-        for partition in partitions
-    ]
+    runs, partitions = build_arrival_runs(datasets, arrival_pattern)
 
     baseline_rows = []
     prefetch_rows = []
@@ -317,27 +413,37 @@ def main():
             {"devices": device_count, **average_run_summaries(prefetch_summaries)}
         )
 
-    partition_sizes = [len(partition) for partition in partitions]
-    print(
-        "Arrival pattern: "
-        f"{CONFIG['huskyqa_queries_per_group']} HuskyQA -> "
-        f"{CONFIG['iirc_queries_per_group']} IIRC"
+    display_names = {
+        name: benchmark_configs[name].get("display_name", name)
+        for name, _ in arrival_pattern
+    }
+    pattern_text = " -> ".join(
+        f"{queries_per_group} {display_names[name]}"
+        for name, queries_per_group in arrival_pattern
     )
-    print(f"IIRC partitions: {partition_sizes}")
-    print(
-        "Assignments: "
-        f"HuskyQA={datasets['huskyqa']['assignment']} | "
-        f"IIRC={datasets['iirc']['assignment']}"
+    partition_text = " | ".join(
+        f"{display_names[name]}={[len(partition) for partition in partitions[name]]}"
+        for name, _ in arrival_pattern
     )
+    assignment_text = " | ".join(
+        f"{display_names[name]}={datasets[name]['assignment']}"
+        for name, _ in arrival_pattern
+    )
+    run_description = (
+        "single run" if len(runs) == 1 else f"{len(runs)}-run arithmetic mean"
+    )
+    print(f"Arrival pattern: {pattern_text}")
+    print(f"Partitions: {partition_text}")
+    print(f"Assignments: {assignment_text}")
     print_crossbench_table(
         "Cross-benchmark end-to-end without planner prefetch "
-        "(five-run arithmetic mean)",
+        f"({run_description})",
         baseline_rows,
         CONFIG["seconds_precision"],
     )
     print_crossbench_table(
         "Cross-benchmark end-to-end with device-count planner prefetch "
-        f"(five-run arithmetic mean, {prefetch_time_field})",
+        f"({run_description}, {prefetch_time_field})",
         prefetch_rows,
         CONFIG["seconds_precision"],
     )

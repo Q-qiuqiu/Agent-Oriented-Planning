@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Run these assignments sequentially. Edit this list for each experiment batch.
+# Run assignments sequentially; edit this list for each experiment batch.
 ASSIGNMENTS=(
-  "g_g_g"
   "h_h_h"
-  "l_l_l"
-  "g_q_l"
-  "q_q_q"
+  "f_f_f"
+  "m_m_m"
+  "d_d_d"
+  "qm_qm_qm"
+  "qc_qc_qc"
+  "i_i_i"
+  "s_s_s"
 )
-
-# Optional arguments passed to every summary_evaluate.py invocation.
 SUMMARY_ARGS=(
   # "--force"
 )
@@ -23,8 +24,7 @@ cd "${TEST_ROOT}"
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
-
-  output_path="$("${PYTHON_BIN}" -B -c '
+  output_path="$(${PYTHON_BIN} -B -c '
 import sys
 sys.path.insert(0, sys.argv[1])
 import summary_evaluate
@@ -44,12 +44,7 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-exit_code = int(sys.argv[2])
-rows = []
-if path.exists():
-    data = json.loads(path.read_text(encoding="utf-8"))
-    rows = data.get("rows", []) if isinstance(data, dict) else data
-
+rows = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 success = sum(
     not row.get("summary_error")
     and isinstance(row.get("final_answer"), str)
@@ -61,8 +56,8 @@ report = {
     "success_count": success,
     "failure_count": len(rows) - success,
 }
-if exit_code:
-    report["process_exit_code"] = exit_code
+if int(sys.argv[2]):
+    report["process_exit_code"] = int(sys.argv[2])
 print(json.dumps(report, ensure_ascii=False, indent=2))
 PY
 
