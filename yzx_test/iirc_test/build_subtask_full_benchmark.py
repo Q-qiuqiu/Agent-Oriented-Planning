@@ -63,9 +63,9 @@ END_PLANNING_REASONING
 
 PLAN_JSON
 [
-  {"id": 1, "task": "...", "agent": "context_agent", "reason": "...", "dep": []},
-  {"id": 2, "task": "...", "agent": "retrieval_agent", "reason": "...", "dep": []},
-  {"id": 3, "task": "...", "agent": "reasoning_agent", "reason": "...", "dep": [1, 2]}
+  {"agent": "context_agent", "id": 1, "task": "...", "reason": "...", "dep": []},
+  {"agent": "retrieval_agent", "id": 2, "task": "...", "reason": "...", "dep": []},
+  {"agent": "reasoning_agent", "id": 3, "task": "...", "reason": "...", "dep": [1, 2]}
 ]
 END_PLAN_JSON
 

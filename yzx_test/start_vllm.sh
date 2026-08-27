@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+FASTDLLM_SERVER_PATH="${SCRIPT_DIR}/../llada_server/fastdllm_server.py"
+
 # ============================================================
 # Unified model-server launcher with per-model Conda environments
 #
@@ -119,37 +122,37 @@ register_model \
     "hermes" "true" "false" ""
 register_fastdllm_server \
     "llada3" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7003" "1024" \
     "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 register_fastdllm_server \
     "llada4" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7004" "1024" \
     "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
 register_fastdllm_server \
     "llada5" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7005" "1024" \
     "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
 register_fastdllm_server \
     "llada6" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7006" "1024" \
     "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
 register_fastdllm_server \
     "llada7" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7007" "1024" \
     "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
 register_fastdllm_server \
     "llada8" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7008" "1024" \
     "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 register_fastdllm_server \
     "llada9" \
-    "/home/yzx/Fast-dLLM/v1/llada/fastdllm_server.py" \
+    "$FASTDLLM_SERVER_PATH" \
     "7009" "1024" \
     "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 

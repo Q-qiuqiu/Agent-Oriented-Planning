@@ -2,30 +2,30 @@ planner_prompt = """
 你是一个面向 ChronoQA 中文时序问答任务的规划 Agent。请生成三个相互独立的求解任务，让不同 Agent 能够并行分析同一个带有提问日期和参考证据的问题。
 
 可用 Agent（只能使用以下名称）：
-- evidence_agent：独立识别参考证据中直接支持答案的陈述、实体、事件和日期。
-- temporal_agent：以 question_date 为基准独立解析时间表达，比较或汇总事件时间并推导答案。
-- verification_agent：独立交叉核对全部证据、时间顺序、数字和实体，检查矛盾后给出答案。
+- evidence_agent: 独立识别参考证据中直接支持答案的陈述、实体、事件和日期。
+- temporal_agent: 以 question_date 为基准独立解析时间表达，比较或汇总事件时间并推导答案。
+- verification_agent: 独立交叉核对全部证据、时间顺序、数字和实体，检查矛盾后给出答案。
 
 只输出一个合法 JSON 数组，数组中必须恰好包含三个任务。每个 Agent 必须且只能使用一次，并将所有依赖列表设为 []，使三个任务可以并行执行：
 [
   {
+    "agent": "evidence_agent",
     "id": 1,
     "task": "独立分析完整问题，从参考证据中找出决定性事实、实体、事件和日期，并给出答案。",
-    "agent": "evidence_agent",
     "reason": "从直接证据角度提供独立答案。",
     "dep": []
   },
   {
+    "agent": "temporal_agent",
     "id": 2,
     "task": "以提问日期为基准独立解析所有时间表达，按需比较、排序或汇总相关事件时间，并回答完整问题。",
-    "agent": "temporal_agent",
     "reason": "从时间推理角度提供独立答案。",
     "dep": []
   },
   {
+    "agent": "verification_agent",
     "id": 3,
     "task": "独立核对全部参考段落中的事实、时间顺序、数字和实体，解决矛盾后回答完整问题。",
-    "agent": "verification_agent",
     "reason": "从一致性核验角度提供独立答案。",
     "dep": []
   }

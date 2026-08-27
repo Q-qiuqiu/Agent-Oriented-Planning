@@ -14,23 +14,23 @@ Output only one valid JSON array in this exact schema. This example shows two
 independent retrievals followed by one consolidated calculation:
 [
   {
+    "agent": "search_agent",
     "id": 1,
     "task": "Retrieve the first independent group of facts, with all entities, dates, and units specified",
-    "agent": "search_agent",
     "reason": "This group requires external factual evidence",
     "dep": []
   },
   {
+    "agent": "search_agent",
     "id": 2,
     "task": "Retrieve the second independent group of facts, with all entities, dates, and units specified",
-    "agent": "search_agent",
     "reason": "A separate search query is needed for this independent fact group",
     "dep": []
   },
   {
+    "agent": "calculation_agent",
     "id": 3,
     "task": "Use every value returned by subtasks 1 and 2 to perform all requested calculations together",
-    "agent": "calculation_agent",
     "reason": "One consolidated calculation should run only after all required facts are available",
     "dep": [1, 2]
   }

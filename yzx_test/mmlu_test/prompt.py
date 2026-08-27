@@ -15,23 +15,23 @@ Output only one valid JSON array containing exactly three tasks. Use each agent
 exactly once and set every dependency list to [] so all tasks can run in parallel:
 [
   {
+    "agent": "knowledge_agent",
     "id": 1,
     "task": "Independently solve the full multiple-choice question from domain knowledge and return one option A-J with justification.",
-    "agent": "knowledge_agent",
     "reason": "Provides an independent fact- and principle-based solution.",
     "dep": []
   },
   {
+    "agent": "reasoning_agent",
     "id": 2,
     "task": "Independently derive the answer using logic, calculations, and all stated conditions, then return one option A-J.",
-    "agent": "reasoning_agent",
     "reason": "Provides an independent derivation-based solution.",
     "dep": []
   },
   {
+    "agent": "elimination_agent",
     "id": 3,
     "task": "Independently evaluate options A-J one by one, eliminate incorrect choices, and return the best remaining option.",
-    "agent": "elimination_agent",
     "reason": "Provides an independent option-comparison solution.",
     "dep": []
   }

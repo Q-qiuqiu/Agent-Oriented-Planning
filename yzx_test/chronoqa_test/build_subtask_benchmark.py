@@ -11,7 +11,7 @@ from prompt import planner_prompt
 
 
 AGENTS = ["evidence_agent", "temporal_agent", "verification_agent"]
-PLANNER_PROMPT_VERSION = "chronoqa_v1"
+PLANNER_PROMPT_VERSION = "chronoqa_v2_agent_first"
 
 # Edit these defaults directly before running.
 CONFIG = {
@@ -68,15 +68,20 @@ def extract_json_array(text):
         match = re.search(r"```(?:json)?\s*(.*?)```", value, re.DOTALL)
         if match:
             value = match.group(1).strip()
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\[", value):
-        try:
-            plan, _ = decoder.raw_decode(value[match.start():])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(plan, list):
-            return plan
-    raise ValueError(f"No JSON plan array found in planner output:\n{value}")
+    array_start = value.find("[")
+    if array_start < 0:
+        raise ValueError("JSON plan array start was not found")
+    try:
+        plan, _ = json.JSONDecoder().raw_decode(value[array_start:])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON plan is malformed: {exc}") from exc
+    if not isinstance(plan, list):
+        raise ValueError("Planner output must contain a JSON array")
+    if not plan:
+        raise ValueError("Planner JSON array is empty")
+    if not all(isinstance(item, dict) for item in plan):
+        raise ValueError("Planner JSON must be an array of objects")
+    return plan
 
 
 def normalize_plan(plan):

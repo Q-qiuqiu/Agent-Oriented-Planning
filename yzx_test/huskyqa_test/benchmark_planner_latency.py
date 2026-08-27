@@ -32,9 +32,9 @@ END_PLANNING_REASONING
 PLAN_JSON
 [
   {
+    "agent": "search_agent",
     "id": 1,
     "task": "A detailed, self-contained, executable subtask that preserves all relevant entities, numbers, constraints, and expected output.",
-    "agent": "search_agent",
     "reason": "A detailed explanation of why this role is the best fit and how its output supports the final answer.",
     "dep": []
   }

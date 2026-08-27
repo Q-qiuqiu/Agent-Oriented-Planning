@@ -18,7 +18,7 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "chronoqa_full_reasoning_first_v2"
+FULL_PROMPT_VERSION = "chronoqa_full_reasoning_first_v3"
 
 
 def remove_json_example(prompt, introduction):
@@ -63,21 +63,21 @@ END_PLANNING_REASONING
 
 PLAN_JSON
 [
-  {"id": 1, "task": "...", "agent": "evidence_agent", "reason": "...", "dep": []},
-  {"id": 2, "task": "...", "agent": "temporal_agent", "reason": "...", "dep": []},
-  {"id": 3, "task": "...", "agent": "verification_agent", "reason": "...", "dep": []}
+  {"agent": "evidence_agent", "id": 1, "task": "...", "reason": "...", "dep": []},
+  {"agent": "temporal_agent", "id": 2, "task": "...", "reason": "...", "dep": []},
+  {"agent": "verification_agent", "id": 3, "task": "...", "reason": "...", "dep": []}
 ]
 END_PLAN_JSON
 """
 
 CONFIG = {
     "input": "benchmarks/chronoqa/chronoqa_sampled.json",
-    "plans_output": "benchmarks/chronoqa/chronoqa_plans_full_llama3.json",
-    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_full_llama3.json",
-    "planner_api_url": "http://10.137.144.97:7002/v1",
+    "plans_output": "benchmarks/chronoqa/chronoqa_plans_full_llada.json",
+    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_full_llada.json",
+    "planner_api_url": "http://10.137.144.97:7003/v1",
     "planner_api_key": "empty",
-    #"planner_model": "/data/labshare/Param/llada",
-    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "planner_model": "/data/labshare/Param/llada",
+    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,
@@ -116,15 +116,20 @@ def extract_json_array(text):
         end = re.search(r"(?m)^\s*END_PLAN_JSON\s*$", segment)
         if end:
             segment = segment[: end.start()]
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\[", segment):
-        try:
-            value, _ = decoder.raw_decode(segment[match.start():])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, list):
-            return value
-    raise ValueError("No JSON plan array found")
+    array_start = segment.find("[")
+    if array_start < 0:
+        raise ValueError("PLAN_JSON array start was not found")
+    try:
+        value, _ = json.JSONDecoder().raw_decode(segment[array_start:])
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"PLAN_JSON is malformed: {exc}") from exc
+    if not isinstance(value, list):
+        raise ValueError("PLAN_JSON must contain a JSON array")
+    if not value:
+        raise ValueError("PLAN_JSON array is empty")
+    if not all(isinstance(item, dict) for item in value):
+        raise ValueError("PLAN_JSON must be an array of objects")
+    return value
 
 
 def extract_reasoning(text):

@@ -63,18 +63,18 @@ END_PLANNING_REASONING
 
 PLAN_JSON
 [
-  {"id": 1, "task": "...", "agent": "knowledge_agent", "reason": "...", "dep": []},
-  {"id": 2, "task": "...", "agent": "reasoning_agent", "reason": "...", "dep": []},
-  {"id": 3, "task": "...", "agent": "elimination_agent", "reason": "...", "dep": []}
+  {"agent": "knowledge_agent", "id": 1, "task": "...", "reason": "...", "dep": []},
+  {"agent": "reasoning_agent", "id": 2, "task": "...", "reason": "...", "dep": []},
+  {"agent": "elimination_agent", "id": 3, "task": "...", "reason": "...", "dep": []}
 ]
 END_PLAN_JSON
 """
 
 CONFIG = {
     "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llada2.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llada2.json",
-    "planner_api_url": "http://10.137.144.97:7003/v1",
+    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llada.json",
+    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llada.json",
+    "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llada",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
