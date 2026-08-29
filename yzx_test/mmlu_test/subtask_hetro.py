@@ -213,14 +213,22 @@ def judge_records(records):
     rows = []
     for record in records:
         for step in record.get("steps", []):
-            rows.append(
-                {
-                    **step,
-                    "source_index": record.get("source_index"),
-                    "question_id": record.get("question_id"),
-                    "category": record.get("category"),
-                    "answer": record.get("answer"),
-                }
+            row = {
+                **step,
+                "source_index": record.get("source_index"),
+                "question_id": record.get("question_id"),
+                "category": record.get("category"),
+                "answer": record.get("answer"),
+            }
+            rows.append(row)
+            print(
+                f"judge source={row.get('source_index')} | step={row.get('id')} "
+                f"| agent={row.get('agent')} "
+                f"| prediction={row.get('predicted_answer')} "
+                f"| answer={row.get('answer')} "
+                f"| correct={row.get('predicted_answer') == row.get('answer')} "
+                f"| error={row.get('error')}",
+                flush=True,
             )
     overall = accuracy_summary(rows)
     by_agent = {}
@@ -292,7 +300,15 @@ def main():
         records = records or load_json(args.responses, []) or []
         result = judge_records(records)
         save_json(args.output, result)
-        print(json.dumps(result["summary"], ensure_ascii=False, indent=2))
+        summary = result["summary"]
+        terminal_summary = {
+            "by_agent": summary["by_agent"],
+            "count": summary["count"],
+            "correct": summary["correct"],
+            "accuracy": summary["accuracy"],
+            "parse_failure_count": summary["parse_failure_count"],
+        }
+        print(json.dumps(terminal_summary, ensure_ascii=False, indent=2))
         print(f"Saved judged subtask scores to {args.output}")
 
 

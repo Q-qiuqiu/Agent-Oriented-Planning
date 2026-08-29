@@ -9,8 +9,8 @@ from prompt import plan_detector_prompt
 
 
 CONFIG = {
-    "plans": "benchmarks/chronoqa/chronoqa_plans_full_llada.json",
-    "output": "chronoqa_test/results/plan_evaluate_full_llada.json",
+    "plans": "benchmarks/chronoqa/chronoqa_plans_full_llama3.json",
+    "output": "chronoqa_test/results/plan_evaluate_full_llama3.json",
     "source_index": None,
     "limit": None,
     "force": False,

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# Summary API configuration. These values override summary_evaluate.py.
+SUMMARY_API_URL="http://10.137.144.97:7004/v1"
+SUMMARY_API_KEY="empty"
+SUMMARY_MODEL="/data/labshare/Param/llada"
+SUMMARY_TEMPERATURE="0.0"
+SUMMARY_TIMEOUT="120"
+
 # Run assignments sequentially; edit this list for each experiment batch.
 ASSIGNMENTS=(
   "h_h_h"
@@ -32,7 +39,13 @@ print(f"{summary_evaluate.RESULTS_DIR}/summary_result_{sys.argv[2]}.json")
 ' "${SCRIPT_DIR}" "${assignment}")"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_evaluate.py" \
-      --assignment "${assignment}" "${SUMMARY_ARGS[@]}" >/dev/null 2>&1; then
+      --assignment "${assignment}" \
+      --summary-api-url "${SUMMARY_API_URL}" \
+      --summary-api-key "${SUMMARY_API_KEY}" \
+      --summary-model "${SUMMARY_MODEL}" \
+      --summary-temperature "${SUMMARY_TEMPERATURE}" \
+      --summary-timeout "${SUMMARY_TIMEOUT}" \
+      "${SUMMARY_ARGS[@]}" >/dev/null 2>&1; then
     exit_code=0
   else
     exit_code=$?

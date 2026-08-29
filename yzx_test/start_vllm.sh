@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-FASTDLLM_SERVER_PATH="${SCRIPT_DIR}/../llada_server/fastdllm_server.py"
+FASTDLLM_SERVER_PATH="${SCRIPT_DIR}/llada_server/fastdllm_server.py"
 
 # ============================================================
 # Unified model-server launcher with per-model Conda environments

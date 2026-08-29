@@ -550,11 +550,14 @@ def judge_rows(response_records, output_path, force=False):
             and previous.get("judge_output")
             and previous.get("scores")
             and previous.get("scorer_response") == row.get("scorer_response")
+            and previous.get("judge_model") == CONFIG["judge_model"]
         ):
             judged.append(previous)
             continue
 
         record = dict(row)
+        record["judge_model"] = CONFIG["judge_model"]
+        record["judge_api_url"] = CONFIG["judge_api_url"]
         started = time.time()
         if record.get("error") or not record.get("scorer_response"):
             record.update(
@@ -644,8 +647,24 @@ def main():
     parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
+    parser.add_argument("--judge-api-url", default=CONFIG["judge_api_url"])
+    parser.add_argument("--judge-api-key", default=CONFIG["judge_api_key"])
+    parser.add_argument("--judge-model", default=CONFIG["judge_model"])
+    parser.add_argument(
+        "--judge-temperature", type=float, default=CONFIG["judge_temperature"]
+    )
+    parser.add_argument("--judge-timeout", type=int, default=CONFIG["judge_timeout"])
     args = parser.parse_args()
 
+    CONFIG.update(
+        {
+            "judge_api_url": args.judge_api_url,
+            "judge_api_key": args.judge_api_key,
+            "judge_model": args.judge_model,
+            "judge_temperature": args.judge_temperature,
+            "judge_timeout": args.judge_timeout,
+        }
+    )
     AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
     args.responses = args.responses or (
         f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"

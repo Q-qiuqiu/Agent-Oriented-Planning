@@ -106,6 +106,7 @@ def summarize(records, output_path, force=False, retry_errors=True):
             previous
             and previous.get("response_signature") == signature
             and previous.get("summary_prompt_version") == SUMMARY_PROMPT_VERSION
+            and previous.get("summary_model") == CONFIG["summary_model"]
             and previous.get("summary_error") is None
             and previous.get("final_answer")
             and not force
@@ -128,6 +129,8 @@ def summarize(records, output_path, force=False, retry_errors=True):
             "answer_type": record.get("answer_type"),
             "reference_document_count": record.get("reference_document_count"),
             "planner_model": record.get("planner_model"),
+            "summary_model": CONFIG["summary_model"],
+            "summary_api_url": CONFIG["summary_api_url"],
             "summary_prompt_version": SUMMARY_PROMPT_VERSION,
             "response_signature": signature,
             "subtasks": record.get("steps", []),
@@ -194,8 +197,24 @@ def main():
     parser.add_argument("--source-index", default=CONFIG["source_index"])
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
+    parser.add_argument("--summary-api-url", default=CONFIG["summary_api_url"])
+    parser.add_argument("--summary-api-key", default=CONFIG["summary_api_key"])
+    parser.add_argument("--summary-model", default=CONFIG["summary_model"])
+    parser.add_argument(
+        "--summary-temperature", type=float, default=CONFIG["summary_temperature"]
+    )
+    parser.add_argument("--summary-timeout", type=int, default=CONFIG["summary_timeout"])
     args = parser.parse_args()
 
+    CONFIG.update(
+        {
+            "summary_api_url": args.summary_api_url,
+            "summary_api_key": args.summary_api_key,
+            "summary_model": args.summary_model,
+            "summary_temperature": args.summary_temperature,
+            "summary_timeout": args.summary_timeout,
+        }
+    )
     args.responses = args.responses or (
         f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
     )

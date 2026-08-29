@@ -44,9 +44,17 @@ def score(records, output_path, force=False):
     for record in records:
         key = str(record.get("source_index"))
         old = by_key.get(key)
-        if old and old.get("final_answer") == record.get("final_answer") and old.get("eval_score") in (0, 1) and not force:
+        if (
+            old
+            and old.get("final_answer") == record.get("final_answer")
+            and old.get("eval_score") in (0, 1)
+            and old.get("judge_model") == CONFIG["judge_model"]
+            and not force
+        ):
             continue
         result = dict(record)
+        result["judge_model"] = CONFIG["judge_model"]
+        result["judge_api_url"] = CONFIG["judge_api_url"]
         started = time.perf_counter()
         if not result.get("answer"):
             result.update({"eval_score": None, "judge_output": None, "judge_error": "missing reference answer"})
@@ -78,7 +86,23 @@ def main():
     parser.add_argument("--input", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
+    parser.add_argument("--judge-api-url", default=CONFIG["judge_api_url"])
+    parser.add_argument("--judge-api-key", default=CONFIG["judge_api_key"])
+    parser.add_argument("--judge-model", default=CONFIG["judge_model"])
+    parser.add_argument(
+        "--judge-temperature", type=float, default=CONFIG["judge_temperature"]
+    )
+    parser.add_argument("--judge-timeout", type=int, default=CONFIG["judge_timeout"])
     args = parser.parse_args()
+    CONFIG.update(
+        {
+            "judge_api_url": args.judge_api_url,
+            "judge_api_key": args.judge_api_key,
+            "judge_model": args.judge_model,
+            "judge_temperature": args.judge_temperature,
+            "judge_timeout": args.judge_timeout,
+        }
+    )
     args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
     args.output = args.output or f"{RESULTS_DIR}/summary_evaluate_{args.assignment}.json"
     records = load_json(args.input, []) or []

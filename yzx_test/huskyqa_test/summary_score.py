@@ -97,12 +97,15 @@ def score_summaries(records, output_path, force=False):
             previous
             and previous.get("final_answer") == record.get("final_answer")
             and previous.get("judge_output") is not None
+            and previous.get("judge_model") == CONFIG["judge_model"]
             and not force
         ):
             rows.append(previous)
             continue
 
         result = dict(record)
+        result["judge_model"] = CONFIG["judge_model"]
+        result["judge_api_url"] = CONFIG["judge_api_url"]
         started = time.time()
         if not result.get("answer"):
             result.update(
@@ -183,8 +186,24 @@ def main():
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--output", default=None)
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
+    parser.add_argument("--judge-api-url", default=CONFIG["judge_api_url"])
+    parser.add_argument("--judge-api-key", default=CONFIG["judge_api_key"])
+    parser.add_argument("--judge-model", default=CONFIG["judge_model"])
+    parser.add_argument(
+        "--judge-temperature", type=float, default=CONFIG["judge_temperature"]
+    )
+    parser.add_argument("--judge-timeout", type=int, default=CONFIG["judge_timeout"])
     args = parser.parse_args()
 
+    CONFIG.update(
+        {
+            "judge_api_url": args.judge_api_url,
+            "judge_api_key": args.judge_api_key,
+            "judge_model": args.judge_model,
+            "judge_temperature": args.judge_temperature,
+            "judge_timeout": args.judge_timeout,
+        }
+    )
     args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
     args.output = args.output or f"{RESULTS_DIR}/summary_score_{args.assignment}.json"
 

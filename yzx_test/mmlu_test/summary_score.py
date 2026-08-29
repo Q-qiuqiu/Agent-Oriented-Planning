@@ -11,7 +11,7 @@ PLAN_VARIANT = "full_llada"
 RESULTS_DIR = f"mmlu_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 CONFIG = {
     "input": f"{RESULTS_DIR}/summary_result_{AGENT_ASSIGNMENT}.json",
-    "output": f"{RESULTS_DIR}/summary_evaluate_{AGENT_ASSIGNMENT}.json",
+    "output": f"{RESULTS_DIR}/summary_score_{AGENT_ASSIGNMENT}.json",
 }
 
 

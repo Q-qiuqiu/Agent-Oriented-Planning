@@ -229,9 +229,17 @@ def judge_records(records, output_path, force=False):
             row = {**step, "source_index": record.get("source_index"), "question_id": record.get("question_id"), "query": record.get("query"), "answer": record.get("answer"), "temporal_type": record.get("temporal_type")}
             key = (str(row.get("source_index")), str(row.get("id")), row.get("model"))
             old = previous.get(key)
-            if old and old.get("response") == row.get("response") and old.get("eval_score") in (0, 1) and not force:
+            if (
+                old
+                and old.get("response") == row.get("response")
+                and old.get("eval_score") in (0, 1)
+                and old.get("judge_model") == CONFIG["judge_model"]
+                and not force
+            ):
                 rows.append(old)
                 continue
+            row["judge_model"] = CONFIG["judge_model"]
+            row["judge_api_url"] = CONFIG["judge_api_url"]
             if row.get("error") or not row.get("response"):
                 row.update({"eval_score": 0, "judge_output": None, "judge_error": row.get("error") or "missing response"})
             else:
@@ -247,6 +255,12 @@ def judge_records(records, output_path, force=False):
                     row.update({"eval_score": None, "judge_output": None, "judge_error": str(exc)})
             rows.append(row)
             save_json(output_path, {"rows": rows, "summary": accuracy_summary(rows)})
+            print(
+                f"judge source={row.get('source_index')} | step={row.get('id')} "
+                f"| agent={row.get('agent')} | score={row.get('eval_score')} "
+                f"| error={row.get('judge_error')}",
+                flush=True,
+            )
     overall = accuracy_summary(rows)
     by_agent = {}
     for agent in AGENT_ORDER:
@@ -288,8 +302,24 @@ def main():
     parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
+    parser.add_argument("--judge-api-url", default=CONFIG["judge_api_url"])
+    parser.add_argument("--judge-api-key", default=CONFIG["judge_api_key"])
+    parser.add_argument("--judge-model", default=CONFIG["judge_model"])
+    parser.add_argument(
+        "--judge-temperature", type=float, default=CONFIG["judge_temperature"]
+    )
+    parser.add_argument("--judge-timeout", type=int, default=CONFIG["judge_timeout"])
     args = parser.parse_args()
 
+    CONFIG.update(
+        {
+            "judge_api_url": args.judge_api_url,
+            "judge_api_key": args.judge_api_key,
+            "judge_model": args.judge_model,
+            "judge_temperature": args.judge_temperature,
+            "judge_timeout": args.judge_timeout,
+        }
+    )
     AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
     args.responses = args.responses or (
         f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
