@@ -3,6 +3,7 @@
 *.jsonl
 *.sqlite
 *.sqlite3
+*.sqlite3*
 *.db
 keys/
 
@@ -16,6 +17,18 @@ __pycache__/
 # Runtime output.
 *.log
 *.tmp
+
+# Current experiment datasets and generated benchmark artifacts. Keep the
+# directory documentation and .gitkeep files, but do not commit local data,
+# plans, expanded subtasks, timings, databases, or model responses.
+yzx_test/benchmarks/**/*.json
+yzx_test/benchmarks/**/*.jsonl
+yzx_test/benchmarks/**/*.sqlite
+yzx_test/benchmarks/**/*.sqlite3
+yzx_test/benchmarks/**/*.db
+yzx_test/benchmarks/legacy_old/
+yzx_test/huskyqa_test/cache/
+yzx_test/**/results*/
 
 # Keep legacy experiment source code, but never its generated artifacts.
 yzx_test_old/**/results*/
