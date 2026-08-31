@@ -172,6 +172,8 @@ def score_summaries(records, output_path, force=False):
 
 
 def main():
+    global RESULTS_DIR
+
     parser = argparse.ArgumentParser(
         description="Score summarized final answers with the original CompareGPT prompt."
     )
@@ -180,6 +182,8 @@ def main():
         default=AGENT_ASSIGNMENT,
         help="Model assignment suffix used by summary_evaluate.py (for example: g_q_l).",
     )
+    parser.add_argument("--model-size", choices=("1b", "3b"), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
     parser.add_argument("--input", default=None)
     parser.add_argument("--query", default=CONFIG["query"])
     parser.add_argument("--source-index", default=CONFIG["source_index"])
@@ -195,6 +199,7 @@ def main():
     parser.add_argument("--judge-timeout", type=int, default=CONFIG["judge_timeout"])
     args = parser.parse_args()
 
+    RESULTS_DIR = f"huskyqa_test/results_{args.model_size}_{args.plan_variant}"
     CONFIG.update(
         {
             "judge_api_url": args.judge_api_url,

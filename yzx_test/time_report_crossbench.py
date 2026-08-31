@@ -12,7 +12,7 @@ CONFIG = {
     "benchmarks": {
         "huskyqa": {
             "display_name": "HuskyQA",
-            "assignment": "g_q_l",
+            "assignment": "q_l_m",
             "planner_file": "benchmarks/huskyqa/huskyqa_plans_full_llada.json",
             "results_dir": "huskyqa_test/results_1b_full_llada",
             "timings_file": "benchmarks/fastdllm_log/huskyqa_full_timings.jsonl",
@@ -45,8 +45,8 @@ CONFIG = {
     "arrival_pattern": [
         ("huskyqa", 1),
         #("iirc", 1),
-        ("mmlu", 1),
-        # ("chronoqa", 1),
+        #("mmlu", 1),
+        ("chronoqa", 1),
     ],
     # Usually leave this empty for one run over every complete benchmark.
     # To reproduce the old five-run setup, use {"iirc": 5}; benchmarks with

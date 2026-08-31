@@ -286,7 +286,7 @@ def judge_records(records, output_path, force=False):
 
 
 def main():
-    global AGENT_CONFIG
+    global AGENT_CONFIG, RESULTS_DIR
 
     parser = argparse.ArgumentParser(
         description="Run the three ChronoQA sub-agents concurrently with heterogeneous APIs."
@@ -297,7 +297,9 @@ def main():
         default=AGENT_ASSIGNMENT,
         help="Model aliases in evidence_temporal_verification order (for example: g_q_l).",
     )
-    parser.add_argument("--plans", default=CONFIG["plans"])
+    parser.add_argument("--model-size", choices=sorted(MODEL_PRESETS), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
+    parser.add_argument("--plans", default=None)
     parser.add_argument("--responses", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
@@ -320,7 +322,11 @@ def main():
             "judge_timeout": args.judge_timeout,
         }
     )
-    AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
+    RESULTS_DIR = f"chronoqa_test/results_{args.model_size}_{args.plan_variant}"
+    AGENT_CONFIG = build_agent_config(args.model_size, args.assignment)
+    args.plans = args.plans or (
+        f"benchmarks/chronoqa/chronoqa_plans_{args.plan_variant}.json"
+    )
     args.responses = args.responses or (
         f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
     )
@@ -328,7 +334,7 @@ def main():
         f"{RESULTS_DIR}/subtask_hetro_scores_{args.assignment}.json"
     )
 
-    print(f"Model assignment: size={MODEL_SIZE} | {args.assignment}")
+    print(f"Model assignment: size={args.model_size} | {args.assignment}")
     for agent in AGENT_ORDER:
         config = AGENT_CONFIG[agent]
         print(f"  {agent}: {config['alias']} | {config['model']} | {config['api_url']}")

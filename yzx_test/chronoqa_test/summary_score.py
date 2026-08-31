@@ -81,8 +81,12 @@ def score(records, output_path, force=False):
 
 
 def main():
+    global RESULTS_DIR
+
     parser = argparse.ArgumentParser(description="Score ChronoQA final answers with the official binary LLM-judge rule.")
     parser.add_argument("--assignment", default=AGENT_ASSIGNMENT)
+    parser.add_argument("--model-size", choices=("1b", "3b"), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
     parser.add_argument("--input", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
@@ -94,6 +98,7 @@ def main():
     )
     parser.add_argument("--judge-timeout", type=int, default=CONFIG["judge_timeout"])
     args = parser.parse_args()
+    RESULTS_DIR = f"chronoqa_test/results_{args.model_size}_{args.plan_variant}"
     CONFIG.update(
         {
             "judge_api_url": args.judge_api_url,

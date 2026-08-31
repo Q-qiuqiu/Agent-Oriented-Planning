@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+MODEL_SIZE="1b"
+PLAN_VARIANT="full_llada"
+
 # Summary API configuration. These values override summary_evaluate.py.
 SUMMARY_API_URL="http://10.137.144.95:7004/v1"
 SUMMARY_API_KEY="empty"
@@ -31,15 +34,12 @@ for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
 
-  output_path="$("${PYTHON_BIN}" -B -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import summary_evaluate
-print(f"{summary_evaluate.RESULTS_DIR}/summary_result_{sys.argv[2]}.json")
-' "${SCRIPT_DIR}" "${assignment}")"
+  output_path="huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_result_${assignment}.json"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_evaluate.py" \
       --assignment "${assignment}" \
+      --model-size "${MODEL_SIZE}" \
+      --plan-variant "${PLAN_VARIANT}" \
       --summary-api-url "${SUMMARY_API_URL}" \
       --summary-api-key "${SUMMARY_API_KEY}" \
       --summary-model "${SUMMARY_MODEL}" \

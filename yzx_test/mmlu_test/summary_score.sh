@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+MODEL_SIZE="1b"
+PLAN_VARIANT="full_llada"
+
 # MMLU-Pro uses option exact match, so no external Judge configuration is needed.
 ASSIGNMENTS=(
   "g_g_g"
@@ -21,15 +24,13 @@ for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
 
-  output_path="$("${PYTHON_BIN}" -B -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import summary_score
-print(f"{summary_score.RESULTS_DIR}/summary_evaluate_{sys.argv[2]}.json")
-' "${SCRIPT_DIR}" "${assignment}")"
+  output_path="mmlu_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_evaluate_${assignment}.json"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_score.py" \
-      --assignment "${assignment}" "${SCORE_ARGS[@]}" >/dev/null 2>&1; then
+      --assignment "${assignment}" \
+      --model-size "${MODEL_SIZE}" \
+      --plan-variant "${PLAN_VARIANT}" \
+      "${SCORE_ARGS[@]}" >/dev/null 2>&1; then
     exit_code=0
   else
     exit_code=$?

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+MODEL_SIZE="1b"
+PLAN_VARIANT="full_llada"
+
 # Summary API configuration. These values override summary_evaluate.py.
 SUMMARY_API_URL="http://10.137.144.97:7004/v1"
 SUMMARY_API_KEY="empty"
@@ -10,14 +13,11 @@ SUMMARY_TIMEOUT="120"
 
 # Run assignments sequentially; edit this list for each experiment batch.
 ASSIGNMENTS=(
-  "h_h_h"
-  "f_f_f"
+  "g_g_g"
+  "g_q_l"
+  "l_l_l"
   "m_m_m"
-  "d_d_d"
-  "qm_qm_qm"
-  "qc_qc_qc"
-  "i_i_i"
-  "s_s_s"
+  "q_q_q"
 )
 SUMMARY_ARGS=(
   # "--force"
@@ -31,15 +31,12 @@ cd "${TEST_ROOT}"
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
-  output_path="$(${PYTHON_BIN} -B -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import summary_evaluate
-print(f"{summary_evaluate.RESULTS_DIR}/summary_result_{sys.argv[2]}.json")
-' "${SCRIPT_DIR}" "${assignment}")"
+  output_path="chronoqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_result_${assignment}.json"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_evaluate.py" \
       --assignment "${assignment}" \
+      --model-size "${MODEL_SIZE}" \
+      --plan-variant "${PLAN_VARIANT}" \
       --summary-api-url "${SUMMARY_API_URL}" \
       --summary-api-key "${SUMMARY_API_KEY}" \
       --summary-model "${SUMMARY_MODEL}" \

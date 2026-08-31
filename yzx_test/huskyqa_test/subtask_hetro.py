@@ -554,7 +554,7 @@ def judge_rows(response_records, output_path, force=False):
 
 def print_run_config(args):
     print(
-        f"Model assignment | size={MODEL_SIZE} | name={args.assignment} "
+        f"Model assignment | size={args.model_size} | name={args.assignment} "
         f"| order={','.join(AGENT_ORDER)}",
         flush=True,
     )
@@ -571,7 +571,7 @@ def print_run_config(args):
 
 
 def main():
-    global AGENT_CONFIG
+    global AGENT_CONFIG, RESULTS_DIR
 
     parser = argparse.ArgumentParser(
         description="Execute planner-selected subtasks with heterogeneous agent APIs, then judge offline results."
@@ -582,7 +582,9 @@ def main():
         default=AGENT_ASSIGNMENT,
         help="Model aliases in search_calculation_reasoning order (for example: g_q_l).",
     )
-    parser.add_argument("--plans", default=CONFIG["plans"])
+    parser.add_argument("--model-size", choices=sorted(MODEL_PRESETS), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
+    parser.add_argument("--plans", default=None)
     parser.add_argument("--responses", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
@@ -605,8 +607,12 @@ def main():
             "judge_timeout": args.judge_timeout,
         }
     )
-    AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
+    RESULTS_DIR = f"huskyqa_test/results_{args.model_size}_{args.plan_variant}"
+    AGENT_CONFIG = build_agent_config(args.model_size, args.assignment)
     CONFIG["search_cache_path"] = search_cache_path_for_agent_config()
+    args.plans = args.plans or (
+        f"benchmarks/huskyqa/huskyqa_plans_{args.plan_variant}.json"
+    )
     args.responses = args.responses or (
         f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
     )

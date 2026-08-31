@@ -256,7 +256,7 @@ def judge_records(records):
 
 
 def main():
-    global AGENT_CONFIG
+    global AGENT_CONFIG, RESULTS_DIR
 
     parser = argparse.ArgumentParser(
         description="Run the three MMLU-Pro sub-agents concurrently with heterogeneous APIs."
@@ -267,14 +267,20 @@ def main():
         default=AGENT_ASSIGNMENT,
         help="Model aliases in knowledge_reasoning_elimination order (for example: g_q_l).",
     )
-    parser.add_argument("--plans", default=CONFIG["plans"])
+    parser.add_argument("--model-size", choices=sorted(MODEL_PRESETS), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
+    parser.add_argument("--plans", default=None)
     parser.add_argument("--responses", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--force", action="store_true", default=CONFIG["force"])
     args = parser.parse_args()
 
-    AGENT_CONFIG = build_agent_config(MODEL_SIZE, args.assignment)
+    RESULTS_DIR = f"mmlu_test/results_{args.model_size}_{args.plan_variant}"
+    AGENT_CONFIG = build_agent_config(args.model_size, args.assignment)
+    args.plans = args.plans or (
+        f"benchmarks/mmlu/mmlu_plans_{args.plan_variant}.json"
+    )
     args.responses = args.responses or (
         f"{RESULTS_DIR}/subtask_hetro_responses_{args.assignment}.json"
     )
@@ -282,7 +288,7 @@ def main():
         f"{RESULTS_DIR}/subtask_hetro_scores_{args.assignment}.json"
     )
 
-    print(f"Model assignment: size={MODEL_SIZE} | {args.assignment}")
+    print(f"Model assignment: size={args.model_size} | {args.assignment}")
     for agent in AGENT_ORDER:
         config = AGENT_CONFIG[agent]
         print(f"  {agent}: {config['alias']} | {config['model']} | {config['api_url']}")

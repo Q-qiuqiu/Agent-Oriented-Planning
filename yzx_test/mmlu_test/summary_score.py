@@ -16,6 +16,8 @@ CONFIG = {
 
 
 def main():
+    global RESULTS_DIR
+
     parser = argparse.ArgumentParser(
         description="Score MMLU-Pro final answers by official option exact match."
     )
@@ -24,10 +26,13 @@ def main():
         default=AGENT_ASSIGNMENT,
         help="Model assignment suffix used by summary_evaluate.py (for example: g_q_l).",
     )
+    parser.add_argument("--model-size", choices=("1b", "3b"), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
     parser.add_argument("--input", default=None)
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
+    RESULTS_DIR = f"mmlu_test/results_{args.model_size}_{args.plan_variant}"
     args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
     args.output = args.output or (
         f"{RESULTS_DIR}/summary_evaluate_{args.assignment}.json"

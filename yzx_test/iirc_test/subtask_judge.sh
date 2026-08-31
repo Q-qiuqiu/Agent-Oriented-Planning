@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+MODEL_SIZE="1b"
+PLAN_VARIANT="full_llada"
+
 # Judge API configuration. These values override subtask_hetro.py.
 JUDGE_API_URL="http://10.137.144.97:7001/v1"
 JUDGE_API_KEY="empty"
@@ -31,15 +34,12 @@ for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
 
-  output_path="$("${PYTHON_BIN}" -B -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import subtask_hetro
-print(f"{subtask_hetro.RESULTS_DIR}/subtask_hetro_scores_{sys.argv[2]}.json")
-' "${SCRIPT_DIR}" "${assignment}")"
+  output_path="iirc_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/subtask_hetro_scores_${assignment}.json"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/subtask_hetro.py" \
       --mode judge \
+      --model-size "${MODEL_SIZE}" \
+      --plan-variant "${PLAN_VARIANT}" \
       --assignment "${assignment}" \
       --judge-api-url "${JUDGE_API_URL}" \
       --judge-api-key "${JUDGE_API_KEY}" \

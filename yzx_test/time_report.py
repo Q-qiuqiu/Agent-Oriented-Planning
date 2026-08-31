@@ -16,7 +16,7 @@ CONFIG = {
     ],
     "benchmarks": {
         "iirc": {
-            "role_count": 5,
+            "role_count": 3,
             "planner_file": (
                 "/data/home/yzx/Agent-Oriented-Planning/yzx_test/benchmarks/"
                 "iirc/iirc_plans_full_llada.json"

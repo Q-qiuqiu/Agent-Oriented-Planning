@@ -185,6 +185,8 @@ def summarize(records, output_path, force=False, retry_errors=True):
 
 
 def main():
+    global RESULTS_DIR
+
     parser = argparse.ArgumentParser(
         description="Summarize three independent MMLU-Pro agent responses."
     )
@@ -193,6 +195,8 @@ def main():
         default=AGENT_ASSIGNMENT,
         help="Model assignment suffix used by subtask_hetro.py (for example: g_q_l).",
     )
+    parser.add_argument("--model-size", choices=("1b", "3b"), default=MODEL_SIZE)
+    parser.add_argument("--plan-variant", default=PLAN_VARIANT)
     parser.add_argument("--responses", default=None)
     parser.add_argument("--output", default=None)
     parser.add_argument("--query", default=CONFIG["query"])
@@ -208,6 +212,7 @@ def main():
     parser.add_argument("--summary-timeout", type=int, default=CONFIG["summary_timeout"])
     args = parser.parse_args()
 
+    RESULTS_DIR = f"mmlu_test/results_{args.model_size}_{args.plan_variant}"
     CONFIG.update(
         {
             "summary_api_url": args.summary_api_url,
