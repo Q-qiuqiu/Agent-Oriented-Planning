@@ -172,9 +172,11 @@ CONFIG = {
     "search_top_k": 5,
     "iirc_sqlite_path": "benchmarks/iirc/context_articles.sqlite3",
     "judge_api_url": "http://10.137.144.97:7001/v1",
+    #"judge_api_url":"http://222.30.44.50:45104/v1/chat/completions",
     "judge_api_key": "empty",
     "judge_model": "/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507",
     #"judge_model": "/home/yzx/models/Qwen3-30B-A3B-Instruct-2507",
+    #"judge_model": "/public/models/Qwen3-30B-A3B/",
     "judge_temperature": 0.0,
     "judge_timeout": 120,
 }

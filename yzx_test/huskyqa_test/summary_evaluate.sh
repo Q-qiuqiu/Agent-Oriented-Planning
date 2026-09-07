@@ -2,22 +2,28 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llada"
+PLAN_VARIANT="full_llama3"
 
 # Summary API configuration. These values override summary_evaluate.py.
-SUMMARY_API_URL="http://10.137.144.97:7004/v1"
+SUMMARY_API_URL="http://10.137.144.97:7002/v1"
 SUMMARY_API_KEY="empty"
-SUMMARY_MODEL="/data/labshare/Param/llada"
+#SUMMARY_MODEL="/mnt/home/yzx/models/LLADA/"
+SUMMARY_MODEL="/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct"
+
 SUMMARY_TEMPERATURE="0.0"
-SUMMARY_TIMEOUT="180"
+SUMMARY_TIMEOUT="120"
 
 # Run these assignments sequentially. Edit this list for each experiment batch.
 ASSIGNMENTS=(
-  "g_g_g"
-  "h_h_h"
-  "l_l_l"
-  "g_q_l"
   "q_q_q"
+  "g_g_g"
+  "l_l_l"
+  "m_m_m"
+  "d_d_d"
+  "qm_qm_qm"
+  "qc_qc_qc"
+  "i_i_i"
+  "s_s_s"
 )
 
 # Optional arguments passed to every summary_evaluate.py invocation.
@@ -30,11 +36,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${TEST_ROOT}"
 
+echo "Batch configuration"
+echo "  benchmark=huskyqa"
+echo "  stage=summary_evaluate"
+echo "  model_size=${MODEL_SIZE}"
+echo "  plan_variant=${PLAN_VARIANT}"
+echo "  results_dir=huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
+echo "  assignments=${ASSIGNMENTS[*]}"
+echo "  summary_model=${SUMMARY_MODEL}"
+echo "  summary_api_url=${SUMMARY_API_URL}"
+echo "====================="
+
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
 
-  output_path="iirc_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_result_${assignment}.json"
+  output_path="huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_result_${assignment}.json"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_evaluate.py" \
       --assignment "${assignment}" \

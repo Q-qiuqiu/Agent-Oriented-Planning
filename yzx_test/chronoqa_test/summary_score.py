@@ -109,7 +109,7 @@ def main():
         }
     )
     args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
-    args.output = args.output or f"{RESULTS_DIR}/summary_evaluate_{args.assignment}.json"
+    args.output = args.output or f"{RESULTS_DIR}/summary_score_{args.assignment}.json"
     records = load_json(args.input, []) or []
     if not records:
         raise ValueError(f"No summary records found in {args.input}")

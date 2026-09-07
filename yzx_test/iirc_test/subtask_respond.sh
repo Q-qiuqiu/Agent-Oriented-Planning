@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+handle_interrupt() {
+  trap - INT TERM
+  printf '\nBatch interrupted; stopping remaining assignments.\n' >&2
+  exit 130
+}
+
+trap handnle_interrupt INT TERM
+
 MODEL_SIZE="1b"
 PLAN_VARIANT="full_llama3"
 
 # Run assignments sequentially. Keep this list aligned with later pipeline stages.
 ASSIGNMENTS=(
-  # "q_q_q"
-  # "g_g_g"
-  # "h_h_h"
-  # "l_l_l"
-  "d_d_d"
-  "qm_qm_qm"
-  "qc_qc_qc"
-  "i_i_i"
-  "s_s_s"
+  "q_q_q"
+  "g_g_g"
+  "l_l_l"
+  "m_m_m"
+  # "d_d_d"
+  # "qm_qm_qm"
+  # "qc_qc_qc"
+  # "i_i_i"
+  # "s_s_s"
 )
 
 # Optional arguments passed to every subtask_hetro.py respond invocation.
@@ -26,6 +34,15 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${TEST_ROOT}"
+
+echo "Batch configuration"
+echo "  benchmark=iirc"
+echo "  stage=subtask_respond"
+echo "  model_size=${MODEL_SIZE}"
+echo "  plan_variant=${PLAN_VARIANT}"
+echo "  results_dir=iirc_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
+echo "  assignments=${ASSIGNMENTS[*]}"
+echo "====================="
 
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"

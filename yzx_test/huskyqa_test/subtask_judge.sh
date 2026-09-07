@@ -2,12 +2,14 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llada"
+PLAN_VARIANT="full_llama3"
 
 # Judge API configuration. These values override subtask_hetro.py.
-JUDGE_API_URL="http://10.137.144.97:7001/v1"
+#JUDGE_API_URL="http://10.137.144.97:7001/v1"
+JUDGE_API_URL="http://222.30.44.50:45104/v1/chat/completions"
 JUDGE_API_KEY="empty"
-JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
+#JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
+JUDGE_MODEL="/public/models/Qwen3-30B-A3B/"
 JUDGE_TEMPERATURE="0.0"
 JUDGE_TIMEOUT="120"
 
@@ -16,8 +18,12 @@ ASSIGNMENTS=(
   "g_g_g"
   "l_l_l"
   "m_m_m"
-  "q_l_m"
   "q_q_q"
+  "d_d_d"
+  "qm_qm_qm"
+  "qc_qc_qc"
+  "i_i_i"
+  "s_s_s"
 )
 
 # Optional arguments passed to every subtask_hetro.py judge invocation.
@@ -29,6 +35,17 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${TEST_ROOT}"
+
+echo "Batch configuration"
+echo "  benchmark=huskyqa"
+echo "  stage=subtask_judge"
+echo "  model_size=${MODEL_SIZE}"
+echo "  plan_variant=${PLAN_VARIANT}"
+echo "  results_dir=huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
+echo "  assignments=${ASSIGNMENTS[*]}"
+echo "  judge_model=${JUDGE_MODEL}"
+echo "  judge_api_url=${JUDGE_API_URL}"
+echo "====================="
 
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"

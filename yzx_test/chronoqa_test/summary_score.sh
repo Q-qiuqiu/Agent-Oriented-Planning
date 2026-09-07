@@ -2,21 +2,26 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llada"
+PLAN_VARIANT="full_llama3"
 
 # Judge API configuration. These values override summary_score.py.
-JUDGE_API_URL="http://10.137.144.97:7001/v1"
+JUDGE_API_URL="http://222.30.44.50:45104/v1/chat/completions"
 JUDGE_API_KEY="empty"
-JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
+#JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
+JUDGE_MODEL="/public/models/Qwen3-30B-A3B/"
 JUDGE_TEMPERATURE="0.0"
 JUDGE_TIMEOUT="120"
 
 ASSIGNMENTS=(
   "g_g_g"
-  "g_q_l"
   "l_l_l"
   "m_m_m"
   "q_q_q"
+  "s_s_s"
+  "i_i_i"
+  "qc_qc_qc"
+  "qm_qm_qm"
+  "d_d_d"
 )
 
 SCORE_ARGS=(
@@ -28,11 +33,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${TEST_ROOT}"
 
+echo "Batch configuration"
+echo "  benchmark=chronoqa"
+echo "  stage=summary_score"
+echo "  model_size=${MODEL_SIZE}"
+echo "  plan_variant=${PLAN_VARIANT}"
+echo "  results_dir=chronoqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
+echo "  assignments=${ASSIGNMENTS[*]}"
+echo "  judge_model=${JUDGE_MODEL}"
+echo "  judge_api_url=${JUDGE_API_URL}"
+echo "====================="
+
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"
   echo "assignment=${assignment}"
 
-  output_path="chronoqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_evaluate_${assignment}.json"
+  output_path="chronoqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_score_${assignment}.json"
 
   if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_score.py" \
       --assignment "${assignment}" \
