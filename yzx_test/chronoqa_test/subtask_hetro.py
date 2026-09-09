@@ -13,7 +13,7 @@ from prompt import judge_prompt
 # Assignment order: evidence_agent, temporal_agent, verification_agent.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "s_s_s"
-PLAN_VARIANT = "full_llama3"
+PLAN_VARIANT = "full_llada"
 
 AGENT_ORDER = ("evidence_agent", "temporal_agent", "verification_agent")
 MODEL_PRESETS = {
@@ -172,6 +172,11 @@ def execute_plans(plans, output_path, limit=None, force=False, retry_errors=True
             record["error"] = plan_record.get("error") or "planner returned no steps"
             by_index[source_index] = record
             save_json(output_path, list(by_index.values()))
+            print(
+                f"respond source={source_index} | step=None | agent=None "
+                f"| response=None | error={record['error']}",
+                flush=True,
+            )
             continue
 
         pending = []

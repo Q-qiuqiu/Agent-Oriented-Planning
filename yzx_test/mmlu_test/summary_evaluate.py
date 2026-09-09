@@ -11,7 +11,7 @@ from prompt import summarization_agent_prompt
 # Keep these values aligned with subtask_hetro.py.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "l_l_l"
-PLAN_VARIANT = "full_llada"
+PLAN_VARIANT = "full_llama3"
 RESULTS_DIR = f"mmlu_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 SUMMARY_PROMPT_VERSION = "mmlu_compact_summary_v2"
 
@@ -23,11 +23,11 @@ CONFIG = {
     "limit": None,
     "force": False,
     "retry_errors": True,
-    "summary_api_url": "http://10.137.144.95:7004/v1",
+    "summary_api_url": "http://10.137.144.97:7002/v1",
     "summary_api_key": "empty",
     #"summary_model": "/data/labshare/Param/llada",
-    "summary_model": "/mnt/home/yzx/models/LLADA/",
-
+    #"summary_model": "/mnt/home/yzx/models/LLADA/",
+    "summary_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "summary_temperature": 0.0,
     "summary_timeout": 120,
 }

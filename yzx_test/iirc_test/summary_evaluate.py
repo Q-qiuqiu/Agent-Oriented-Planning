@@ -180,6 +180,7 @@ def summarize_responses(records, output_path, force=False):
         save_json(output_path, retained + results)
         print(
             f"summary source={result.get('source_index')} "
+            f"| prediction={result.get('final_answer')} "
             f"| error={result.get('summary_error')}",
             flush=True,
         )

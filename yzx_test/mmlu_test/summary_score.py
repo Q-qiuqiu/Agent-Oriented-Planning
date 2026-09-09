@@ -49,6 +49,12 @@ def main():
         item["predicted_answer"] = prediction
         item["correct"] = prediction == item.get("answer")
         scored.append(item)
+        print(
+            f"score source={item.get('source_index')} "
+            f"| prediction={prediction} "
+            f"| error={item.get('summary_error')}",
+            flush=True,
+        )
 
     result = {"rows": scored, "summary": accuracy_summary(scored)}
     output = Path(args.output)

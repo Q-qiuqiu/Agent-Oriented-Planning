@@ -32,6 +32,7 @@ SCORE_ARGS=(
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
 echo "Batch configuration"
@@ -51,7 +52,7 @@ for index in "${!ASSIGNMENTS[@]}"; do
 
   output_path="huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_score_${assignment}.json"
 
-  if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_score.py" \
+  if run_with_error_output "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_score.py" \
       --assignment "${assignment}" \
       --model-size "${MODEL_SIZE}" \
       --plan-variant "${PLAN_VARIANT}" \
@@ -60,7 +61,7 @@ for index in "${!ASSIGNMENTS[@]}"; do
       --judge-model "${JUDGE_MODEL}" \
       --judge-temperature "${JUDGE_TEMPERATURE}" \
       --judge-timeout "${JUDGE_TIMEOUT}" \
-      "${SCORE_ARGS[@]}" >/dev/null 2>&1; then
+      "${SCORE_ARGS[@]}"; then
     exit_code=0
   else
     exit_code=$?

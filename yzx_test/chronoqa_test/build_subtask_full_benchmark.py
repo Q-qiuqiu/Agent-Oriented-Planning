@@ -72,9 +72,9 @@ END_PLAN_JSON
 
 CONFIG = {
     "input": "benchmarks/chronoqa/chronoqa_sampled.json",
-    "plans_output": "benchmarks/chronoqa/chronoqa_plans_full_llada.json",
-    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7003/v1",
+    "plans_output": "benchmarks/chronoqa/chronoqa_plans_base_full_llada.json",
+    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_base_full_llada.json",
+    "planner_api_url": "http://10.137.144.97:7004/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llada",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",

@@ -164,6 +164,11 @@ def execute_plans(plans, output_path, limit=None, force=False, retry_errors=True
             record["error"] = plan_record.get("error") or "planner returned no steps"
             by_index[source_index] = record
             save_json(output_path, list(by_index.values()))
+            print(
+                f"respond source={source_index} | step=None | agent=None "
+                f"| response=None | error={record['error']}",
+                flush=True,
+            )
             continue
 
         pending = []

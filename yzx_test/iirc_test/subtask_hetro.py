@@ -390,6 +390,11 @@ def execute_plans(plans, responses_path, limit=None, force=False, retry_errors=T
         if plan_record.get("error") or not plan_record.get("plan"):
             response_record["error"] = plan_record.get("error") or "planner returned no steps"
             save_json(responses_path, ordered_records(records_by_index, plans))
+            print(
+                f"respond source={source_index} | step=None | agent=None "
+                f"| response=None | error={response_record['error']}",
+                flush=True,
+            )
             continue
 
         previous_steps = {

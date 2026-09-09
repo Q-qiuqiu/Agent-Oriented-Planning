@@ -33,6 +33,7 @@ RESPOND_ARGS=(
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
 echo "Batch configuration"
@@ -50,13 +51,12 @@ for index in "${!ASSIGNMENTS[@]}"; do
 
   output_path="iirc_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/subtask_hetro_responses_${assignment}.json"
 
-  if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/subtask_hetro.py" \
+  if run_with_error_output "${PYTHON_BIN}" -B "${SCRIPT_DIR}/subtask_hetro.py" \
       --mode respond \
       --model-size "${MODEL_SIZE}" \
       --plan-variant "${PLAN_VARIANT}" \
       --assignment "${assignment}" \
-      "${RESPOND_ARGS[@]}" \
-      >/dev/null 2>&1; then
+      "${RESPOND_ARGS[@]}"; then
     exit_code=0
   else
     exit_code=$?

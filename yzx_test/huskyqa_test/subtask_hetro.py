@@ -20,7 +20,7 @@ from prompt import scorer_prompt
 # 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
-PLAN_VARIANT = "full_llama3"
+PLAN_VARIANT = "base_llama3"
 
 AGENT_ORDER = (
     "search_agent",
@@ -374,6 +374,11 @@ def execute_plans(
         if plan_record.get("error") or not plan_record.get("plan"):
             response_record["error"] = plan_record.get("error") or "planner returned no steps"
             save_json(responses_path, ordered_records(records_by_index, plans))
+            print(
+                f"respond source={source_index} | step=None | agent=None "
+                f"| response=None | error={response_record['error']}",
+                flush=True,
+            )
             continue
 
         step_records = {

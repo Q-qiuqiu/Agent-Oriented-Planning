@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llama3"
+PLAN_VARIANT="base_llama3"
 
 # Summary API configuration. These values override summary_evaluate.py.
 SUMMARY_API_URL="http://10.137.144.97:7002/v1"
@@ -33,6 +33,7 @@ SUMMARY_ARGS=(
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
 echo "Batch configuration"
@@ -52,7 +53,7 @@ for index in "${!ASSIGNMENTS[@]}"; do
 
   output_path="mmlu_test/results_${MODEL_SIZE}_${PLAN_VARIANT}/summary_result_${assignment}.json"
 
-  if "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_evaluate.py" \
+  if run_with_error_output "${PYTHON_BIN}" -B "${SCRIPT_DIR}/summary_evaluate.py" \
       --assignment "${assignment}" \
       --model-size "${MODEL_SIZE}" \
       --plan-variant "${PLAN_VARIANT}" \
@@ -61,7 +62,7 @@ for index in "${!ASSIGNMENTS[@]}"; do
       --summary-model "${SUMMARY_MODEL}" \
       --summary-temperature "${SUMMARY_TEMPERATURE}" \
       --summary-timeout "${SUMMARY_TIMEOUT}" \
-      "${SUMMARY_ARGS[@]}" >/dev/null 2>&1; then
+      "${SUMMARY_ARGS[@]}"; then
     exit_code=0
   else
     exit_code=$?
