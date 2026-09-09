@@ -13,7 +13,7 @@ from prompt import judge_prompt
 # Assignment order: evidence_agent, temporal_agent, verification_agent.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "s_s_s"
-PLAN_VARIANT = "full_llada"
+PLAN_VARIANT = "full_llama3"
 
 AGENT_ORDER = ("evidence_agent", "temporal_agent", "verification_agent")
 MODEL_PRESETS = {

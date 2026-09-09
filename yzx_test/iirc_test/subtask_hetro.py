@@ -21,7 +21,7 @@ from prompt import scorer_prompt
 # 3b aliases: l=llama, g=gemma, q=qwen3, p=phi4, m=minicpm.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
-PLAN_VARIANT = "full_llada"
+PLAN_VARIANT = "base_llama3"
 
 AGENT_ORDER = (
     "context_agent",
@@ -103,6 +103,7 @@ MODEL_PRESETS = {
 PLAN_FILES = {
     "llama": "benchmarks/iirc/iirc_plans_llama3.json",
     "llada": "benchmarks/iirc/iirc_plans_llada.json",
+    "base_llama3": "benchmarks/iirc/iirc_plans_base_llama3.json",
     "full_llama3": "benchmarks/iirc/iirc_plans_full_llama3.json",
     "full_llada": "benchmarks/iirc/iirc_plans_full_llada.json",
 }
@@ -141,7 +142,7 @@ def build_agent_config(model_size, assignment):
             "api_url": api_url,
             "api_key": "empty",
             "temperature": 0.0,
-            "timeout": 120,
+            "timeout": 180,
         }
     return config
 

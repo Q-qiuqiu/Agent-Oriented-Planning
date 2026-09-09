@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llamda"
+PLAN_VARIANT="full_llada"
 
 # Summary API configuration. These values override summary_evaluate.py.
 SUMMARY_API_URL="http://10.137.144.95:7004/v1"

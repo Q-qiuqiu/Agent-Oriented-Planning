@@ -10,7 +10,7 @@ handle_interrupt() {
 trap handle_interrupt INT TERM
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llama3"
+PLAN_VARIANT="base_llama3"
 
 # Run assignments sequentially. Keep this list aligned with later pipeline stages.
 ASSIGNMENTS=(
@@ -18,12 +18,11 @@ ASSIGNMENTS=(
   "g_g_g"
   "l_l_l"
   "m_m_m"
-
-  # "d_d_d"
-  # "qm_qm_qm"
-  # "qc_qc_qc"
-  # "i_i_i"
-  # "s_s_s"
+  "d_d_d"
+  "qm_qm_qm"
+  "qc_qc_qc"
+  "i_i_i"
+  "s_s_s"
 )
 
 # Optional arguments passed to every subtask_hetro.py respond invocation.

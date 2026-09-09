@@ -9,6 +9,8 @@ FASTDLLM_SERVER_PATH="${SCRIPT_DIR}/llada_server/fastdllm_server.py"
 #
 # Usage:
 #   bash start_vllm.sh list
+#   bash start_vllm.sh status [model_name] [--json] [--all]
+#   bash start_vllm.sh stop <model_name> [--force]
 #   bash start_vllm.sh <model_name> <cuda_visible_devices>
 #   bash start_vllm.sh <model_name> <cuda_visible_devices> --background
 #   bash start_vllm.sh <model_name> <cuda_visible_devices> -- <extra vLLM args>
@@ -16,9 +18,9 @@ FASTDLLM_SERVER_PATH="${SCRIPT_DIR}/llada_server/fastdllm_server.py"
 # Examples:
 #   bash start_vllm.sh phi4-4b 6
 #   bash start_vllm.sh llama3-8b 0
-#   bash start_vllm.sh llada 4 --background
+#   bash start_vllm.sh llada4 4 --background
 #   bash start_vllm.sh qwen3-4b 2 --background
-#   bash start_vllm.sh llama3.2-3b 6 -- --disable-log-requests
+#   bash start_vllm.sh llama3-3b 6 -- --disable-log-requests
 #   bash start_vllm.sh qwen3-30b 0,1,2,3 -- --tensor-parallel-size 4
 #
 # Environment selection:
@@ -34,7 +36,10 @@ FASTDLLM_SERVER_PATH="${SCRIPT_DIR}/llada_server/fastdllm_server.py"
 
 PYTHON_BIN_OVERRIDE="${PYTHON_BIN:-}"
 VLLM_MODULE="${VLLM_MODULE:-vllm.entrypoints.openai.api_server}"
-LOG_DIR="${VLLM_LOG_DIR:-./vllm_logs}"
+LOG_DIR="${VLLM_LOG_DIR:-${SCRIPT_DIR}/vllm_logs}"
+STATE_DIR="${VLLM_STATE_DIR:-${LOG_DIR}/state}"
+MANAGER_SCRIPT="${SCRIPT_DIR}/model_server_manager.py"
+CONTROL_PYTHON="${MODEL_CONTROL_PYTHON:-$(command -v python3 || true)}"
 
 declare -A MODEL_PATH
 declare -A MODEL_PORT
@@ -129,22 +134,22 @@ register_fastdllm_server \
     "llada4" \
     "$FASTDLLM_SERVER_PATH" \
     "7004" "1024" \
-    "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 register_fastdllm_server \
     "llada5" \
     "$FASTDLLM_SERVER_PATH" \
     "7005" "1024" \
-    "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 register_fastdllm_server \
     "llada6" \
     "$FASTDLLM_SERVER_PATH" \
     "7006" "1024" \
-    "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 register_fastdllm_server \
     "llada7" \
     "$FASTDLLM_SERVER_PATH" \
     "7007" "1024" \
-    "--gen-length 128 --block-size 32 --cache-mode dual --threshold 0.9 --steps 128"
+    "--gen-length 1024 --block-size 32 --cache-mode dual --threshold 0.9 --steps 1024"
 register_fastdllm_server \
     "llada8" \
     "$FASTDLLM_SERVER_PATH" \
@@ -262,21 +267,58 @@ usage() {
     cat <<'USAGE'
 Usage:
   bash start_vllm.sh list
+  bash start_vllm.sh status [model_name] [--json] [--all]
+  bash start_vllm.sh stop <model_name> [--force]
   bash start_vllm.sh <model_name> <cuda_visible_devices> [--background] [-- extra_vllm_args...]
 
 Examples:
+  bash start_vllm.sh status
+  bash start_vllm.sh status llama3-1b
+  bash start_vllm.sh status llama3-1b --json
+  bash start_vllm.sh stop llama3-1b
+  bash start_vllm.sh stop llama3-1b --force
   bash start_vllm.sh phi4-4b 6
   bash start_vllm.sh llama3-8b 0
-  bash start_vllm.sh llada 4 --background
+  bash start_vllm.sh llada4 4 --background
   bash start_vllm.sh qwen3-4b 2 --background
-  bash start_vllm.sh llama3.2-3b 6 -- --disable-log-requests
+  bash start_vllm.sh llama3-3b 6 -- --disable-log-requests
   bash start_vllm.sh qwen3-30b 0,1,2,3 -- --tensor-parallel-size 4
 
 Environment variables:
   PYTHON_BIN       Explicit Python executable; overrides model Conda mapping.
   VLLM_MODULE      vLLM API server module.
-  VLLM_LOG_DIR     Background log directory. Default: ./vllm_logs
+  VLLM_LOG_DIR     Background log directory. Default: <script_dir>/vllm_logs
+  VLLM_STATE_DIR   Runtime state directory. Default: $VLLM_LOG_DIR/state
+  MODEL_CONTROL_PYTHON  Python used by status/stop commands. Default: python3
 USAGE
+}
+
+require_manager() {
+    if [[ -z "$CONTROL_PYTHON" || ! -x "$CONTROL_PYTHON" ]]; then
+        echo "Error: python3 is required for model status and stop control." >&2
+        exit 1
+    fi
+    if [[ ! -f "$MANAGER_SCRIPT" ]]; then
+        echo "Error: model manager was not found: $MANAGER_SCRIPT" >&2
+        exit 1
+    fi
+}
+
+register_running_server() {
+    local pid="$1"
+    local mode="$2"
+    local log_file="${3:-}"
+    require_manager
+    "$CONTROL_PYTHON" "$MANAGER_SCRIPT" register \
+        --state-dir "$STATE_DIR" \
+        --model "$MODEL_NAME" \
+        --model-path "$MODEL" \
+        --pid "$pid" \
+        --gpus "$CUDA_DEVICES" \
+        --port "$PORT" \
+        --runner "$RUNNER" \
+        --mode "$mode" \
+        --log-file "$log_file"
 }
 
 list_models() {
@@ -427,6 +469,31 @@ if [[ "$1" == "list" || "$1" == "--list" ]]; then
     exit 0
 fi
 
+if [[ "$1" == "status" ]]; then
+    shift
+    require_manager
+    STATUS_ARGS=(status --state-dir "$STATE_DIR")
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        STATUS_ARGS+=(--model "$1")
+        shift
+    fi
+    exec "$CONTROL_PYTHON" "$MANAGER_SCRIPT" "${STATUS_ARGS[@]}" "$@"
+fi
+
+if [[ "$1" == "stop" ]]; then
+    shift
+    if [[ $# -eq 0 || "$1" == --* ]]; then
+        echo "Error: stop requires a model name." >&2
+        usage >&2
+        exit 1
+    fi
+    STOP_MODEL="$1"
+    shift
+    require_manager
+    exec "$CONTROL_PYTHON" "$MANAGER_SCRIPT" stop \
+        --state-dir "$STATE_DIR" --model "$STOP_MODEL" "$@"
+fi
+
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
     usage
     exit 0
@@ -482,6 +549,16 @@ ENFORCE_EAGER="${MODEL_ENFORCE_EAGER[$MODEL_NAME]}"
 CONFIG_EXTRA_ARGS="${MODEL_EXTRA_ARGS[$MODEL_NAME]}"
 TARGET_CONDA_ENV="${MODEL_CONDA_ENV[$MODEL_NAME]-}"
 RUNNER="${MODEL_RUNNER[$MODEL_NAME]}"
+
+require_manager
+if "$CONTROL_PYTHON" "$MANAGER_SCRIPT" is-running \
+    --state-dir "$STATE_DIR" --model "$MODEL_NAME"
+then
+    echo "Error: model '$MODEL_NAME' already has a registered running server." >&2
+    echo "Inspect it with: bash start_vllm.sh status '$MODEL_NAME'" >&2
+    echo "Stop it with:    bash start_vllm.sh stop '$MODEL_NAME'" >&2
+    exit 1
+fi
 
 if [[ ! -e "$MODEL" ]]; then
     echo "Warning: model path does not exist: $MODEL" >&2
@@ -568,6 +645,7 @@ if [[ "$BACKGROUND" == "true" ]]; then
     nohup "${CMD[@]}" >"$LOG_FILE" 2>&1 &
     PID=$!
     echo "$PID" >"$PID_FILE"
+    register_running_server "$PID" "background" "$LOG_FILE"
 
     echo "Started in background."
     echo "PID:      $PID"
@@ -575,5 +653,10 @@ if [[ "$BACKGROUND" == "true" ]]; then
     echo "Log file: $LOG_FILE"
     echo "Follow:   tail -f '$LOG_FILE'"
 else
+    register_running_server "$$" "foreground"
+    if [[ -t 1 ]]; then
+        printf '\033]0;%s | GPU %s | port %s\007' \
+            "$MODEL_NAME" "$CUDA_DEVICES" "$PORT"
+    fi
     exec "${CMD[@]}"
 fi

@@ -12,7 +12,7 @@ from openai_compat import run_chat_completion
 # Assignment order: knowledge_agent, reasoning_agent, elimination_agent.
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "s_s_s"
-PLAN_VARIANT = "full_llada"
+PLAN_VARIANT = "full_llama3"
 
 AGENT_ORDER = ("knowledge_agent", "reasoning_agent", "elimination_agent")
 MODEL_PRESETS = {
