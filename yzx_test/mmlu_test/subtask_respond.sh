@@ -10,7 +10,7 @@ handle_interrupt() {
 trap handle_interrupt INT TERM
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="base_llama3"
+PLAN_VARIANT="base_llada"
 
 # Run assignments sequentially. Keep this list aligned with later pipeline stages.
 ASSIGNMENTS=(

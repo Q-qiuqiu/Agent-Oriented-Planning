@@ -7,8 +7,166 @@ from pathlib import Path
 
 import requests
 
+from llada_server.planner_json_repair import repair_plan_json_response
+
 
 STRATEGY = "base_llama3"
+PREFETCH_START_MARKER = "PREFETCH_AGENTS"
+PREFETCH_END_MARKER = "END_PREFETCH_AGENTS"
+
+
+def _extract_marked_json_array(text, start_marker, end_marker):
+    starts = list(re.finditer(
+        rf"(?m)^\s*{re.escape(start_marker)}\s*:?[ \t]*$", text
+    ))
+    if not starts:
+        raise ValueError(f"Missing {start_marker} marker")
+    if len(starts) != 1:
+        raise ValueError(f"Multiple {start_marker} sections found")
+    segment = text[starts[0].end():]
+    end = re.search(
+        rf"(?m)^\s*{re.escape(end_marker)}\s*$", segment
+    )
+    if end is not None:
+        segment = segment[:end.start()]
+
+    # Decode only the first array after the marker. Searching later opening
+    # brackets can mistake a nested dep=[] for the complete plan when the
+    # outer JSON array has a syntax error.
+    array_start = segment.find("[")
+    if array_start < 0:
+        raise ValueError(f"No JSON array found after {start_marker}")
+    decoder = json.JSONDecoder()
+    value, _ = decoder.raw_decode(segment[array_start:])
+    if not isinstance(value, list):
+        raise ValueError(f"JSON value after {start_marker} is not an array")
+    return value
+
+
+def _repair_plan_json_syntax_only(text, allowed_agents):
+    repaired, report = repair_plan_json_response(text, allowed_agents)
+    operations = report.get("operations") or []
+    syntax_method = report.get("method") in {"minimal_syntax", "schema_rebuild"}
+    changed_agent = any(
+        str(operation).startswith("canonicalize_agent_name:")
+        for operation in operations
+    )
+    if report.get("applied") and syntax_method and not changed_agent:
+        return repaired
+    return text
+
+
+def extract_planning_reasoning(text):
+    start = re.search(
+        r"(?m)^\s*PLANNING_REASONING\s*:?[ \t]*$", text
+    )
+    if start is None:
+        return None
+    segment = text[start.end():]
+    end = re.search(
+        r"(?m)^\s*(?:END_PLANNING_REASONING|PLAN_JSON)\s*:?[ \t]*$",
+        segment,
+    )
+    if end is None:
+        return None
+    return segment[:end.start()].strip() or None
+
+
+def build_prefetch_reasoning_plan_prompt(full_prompt, language="en"):
+    """Prepend Agent assignments while preserving the full prompt verbatim."""
+    example_plan = _extract_marked_json_array(
+        full_prompt, "PLAN_JSON", "END_PLAN_JSON"
+    )
+    example_agents = [
+        {"id": step.get("id"), "agent": step.get("agent")}
+        for step in example_plan
+    ]
+    example = json.dumps(example_agents, ensure_ascii=False, indent=2)
+    if language == "zh":
+        contract = f"""在执行下方原始规划指令之前，额外先输出一个 Agent 分配区段。
+该区段必须是整个响应的第一部分：
+
+{PREFETCH_START_MARKER}
+{example}
+{PREFETCH_END_MARKER}
+
+其中必须按最终执行顺序为 PLAN_JSON 的每个任务输出一项，只能包含 `id` 和
+`agent`。随后逐字遵循下方原始指令要求的响应结构，依次输出完整的
+PLANNING_REASONING 和 PLAN_JSON。PREFETCH_AGENTS 与最终 PLAN_JSON 的任务数量、
+id 和 Agent 序列必须逐项完全一致；否则整个计划视为失败。
+
+以下原始规划指令除增加上述前置区段外保持不变："""
+    else:
+        contract = f"""Before following the original planning instructions below,
+output one additional Agent-assignment section as the first part of the response:
+
+{PREFETCH_START_MARKER}
+{example}
+{PREFETCH_END_MARKER}
+
+Emit exactly one entry for every PLAN_JSON task in final execution order. Each
+entry must contain only `id` and `agent`. Then follow the original response
+instructions below verbatim, producing the complete PLANNING_REASONING followed
+by PLAN_JSON. PREFETCH_AGENTS and PLAN_JSON must have exactly matching task
+counts, ids, and Agent sequences; otherwise the entire plan is invalid.
+
+Original planning instructions, unchanged except for the added prefix above:"""
+    return f"{contract}\n\n{full_prompt}"
+
+
+def parse_prefetch_reasoning_plan(text, allowed_agents):
+    parseable_text = _repair_plan_json_syntax_only(text, allowed_agents)
+    prefetch_rows = _extract_marked_json_array(
+        parseable_text, PREFETCH_START_MARKER, PREFETCH_END_MARKER
+    )
+    raw_plan = _extract_marked_json_array(
+        parseable_text, "PLAN_JSON", "END_PLAN_JSON"
+    )
+    if not prefetch_rows:
+        raise ValueError("PREFETCH_AGENTS must be a non-empty JSON array")
+    if not raw_plan or not all(isinstance(step, dict) for step in raw_plan):
+        raise ValueError("PLAN_JSON must be a non-empty array of task objects")
+
+    names = []
+    ids = []
+    for position, row in enumerate(prefetch_rows, start=1):
+        if not isinstance(row, dict) or set(row) != {"id", "agent"}:
+            raise ValueError(
+                f"PREFETCH_AGENTS[{position - 1}] must contain only id and agent"
+            )
+        agent = row.get("agent")
+        if not isinstance(agent, str):
+            raise ValueError(
+                f"PREFETCH_AGENTS[{position - 1}].agent must be a string"
+            )
+        agent = agent.strip().lower()
+        if agent not in allowed_agents:
+            raise ValueError(
+                f"Unsupported prefetched agent {agent!r} at position {position}; "
+                f"expected one of {allowed_agents}"
+            )
+        ids.append(row.get("id"))
+        names.append(agent)
+    return names, ids, raw_plan, extract_planning_reasoning(parseable_text)
+
+
+def validate_prefetch_plan_match(prefetch_names, prefetch_ids, plan):
+    planned_names = [step["agent"] for step in plan]
+    planned_ids = [step.get("id") for step in plan]
+    mismatch = (
+        len(prefetch_names) != len(planned_names)
+        or [str(value) for value in prefetch_ids]
+        != [str(value) for value in planned_ids]
+        or prefetch_names != planned_names
+    )
+    if mismatch:
+        prefetched = list(zip(prefetch_ids, prefetch_names))
+        planned = list(zip(planned_ids, planned_names))
+        raise ValueError(
+            "PREFETCH_AGENTS does not exactly match PLAN_JSON: "
+            f"prefetch={prefetched}, plan={planned}"
+        )
+    return planned_names
 
 
 def replace_json_array_example(base_prompt, introduction, output_contract):
@@ -503,6 +661,10 @@ def build_plans(queries, config, allowed_agents, normalize_plan):
         started = time.perf_counter()
         raw_output = None
         agent_names = None
+        prefetch_ids = None
+        planned_agent_names = None
+        planning_reasoning = None
+        prefetch_plan_mismatch = None
         record = dict(row)
         planner_input = record.pop("planner_input", None) or record["query"]
         record.setdefault("source", config["source"])
@@ -515,27 +677,51 @@ def build_plans(queries, config, allowed_agents, normalize_plan):
         )
         try:
             raw_output = request_completion(planner_input, config)
-            agent_names = extract_prefetch_agent_names(
-                raw_output, allowed_agents
-            )
-            agent_names, raw_plan = parse_agent_first_plan(
-                raw_output,
-                allowed_agents,
-                config.get("task_details_format"),
-            )
+            if planner_mode == "prefetch_reasoning_plan":
+                (
+                    agent_names,
+                    prefetch_ids,
+                    raw_plan,
+                    planning_reasoning,
+                ) = parse_prefetch_reasoning_plan(raw_output, allowed_agents)
+            else:
+                agent_names = extract_prefetch_agent_names(
+                    raw_output, allowed_agents
+                )
+                agent_names, raw_plan = parse_agent_first_plan(
+                    raw_output,
+                    allowed_agents,
+                    config.get("task_details_format"),
+                )
             plan = normalize_plan(raw_plan)
             planned_agent_names = [step["agent"] for step in plan]
+            if planner_mode == "prefetch_reasoning_plan":
+                try:
+                    planned_agent_names = validate_prefetch_plan_match(
+                        agent_names, prefetch_ids, plan
+                    )
+                    prefetch_plan_mismatch = False
+                except ValueError:
+                    prefetch_plan_mismatch = True
+                    raise
+            else:
+                prefetch_plan_mismatch = agent_names != planned_agent_names
             record.update(
                 {
                     "prefetch_agent_names": agent_names,
+                    "prefetch_agent_ids": prefetch_ids,
                     "planned_agent_names": planned_agent_names,
-                    "prefetch_plan_mismatch": (
-                        agent_names != planned_agent_names
-                    ),
+                    "prefetch_plan_mismatch": prefetch_plan_mismatch,
+                    "planning_reasoning": planning_reasoning,
                     "raw_plan": raw_output,
                     "plan": plan,
                     "plan_call_count": len(plan),
                     "exceeds_recommended_calls": len(plan) > 5,
+                    "format_warnings": (
+                        []
+                        if planning_reasoning
+                        else ["missing planning reasoning section"]
+                    ),
                     "error": None,
                 }
             )
@@ -543,8 +729,10 @@ def build_plans(queries, config, allowed_agents, normalize_plan):
             record.update(
                 {
                     "prefetch_agent_names": agent_names,
-                    "planned_agent_names": None,
-                    "prefetch_plan_mismatch": None,
+                    "prefetch_agent_ids": prefetch_ids,
+                    "planned_agent_names": planned_agent_names,
+                    "prefetch_plan_mismatch": prefetch_plan_mismatch,
+                    "planning_reasoning": planning_reasoning,
                     "raw_plan": raw_output,
                     "plan": None,
                     "plan_call_count": None,
@@ -558,6 +746,8 @@ def build_plans(queries, config, allowed_agents, normalize_plan):
         print(
             f"planned {source_index} | prefetched="
             f"{len(record.get('prefetch_agent_names') or [])} "
+            f"| reasoning_chars="
+            f"{len(record.get('planning_reasoning') or '')} "
             f"| subtasks={len(record.get('plan') or [])} "
             f"| mismatch={record.get('prefetch_plan_mismatch')} "
             f"| error={record['error']}",
@@ -623,8 +813,7 @@ def run_builder(
     ]
     error_count = len(plans) - len(successful)
     mismatch_count = sum(
-        row.get("prefetch_plan_mismatch") is True
-        for row in successful
+        row.get("prefetch_plan_mismatch") is True for row in plans
     )
     print("Base Llama3 generation summary")
     print(

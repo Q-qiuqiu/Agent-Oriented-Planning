@@ -2,13 +2,14 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llama3"
+PLAN_VARIANT="base_llama3"
 
 # Judge API configuration. These values override subtask_hetro.py.
-JUDGE_API_URL="http://222.30.44.50:45104/v1/chat/completions"
+JUDGE_API_URL="http://10.137.144.97:7001/v1"
+#JUDGE_API_URL="http://222.30.44.50:45104/v1/chat/completions"
 JUDGE_API_KEY="empty"
-#JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
-JUDGE_MODEL="/public/models/Qwen3-30B-A3B/"
+JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
+#JUDGE_MODEL="/public/models/Qwen3-30B-A3B/"
 JUDGE_TEMPERATURE="0.0"
 JUDGE_TIMEOUT="120"
 
@@ -18,11 +19,11 @@ ASSIGNMENTS=(
   "l_l_l"
   "m_m_m"
   "q_q_q"
-  # "s_s_s"
-  # "i_i_i"
-  # "qc_qc_qc"
-  # "qm_qm_qm"
-  # "d_d_d"
+  "s_s_s"
+  "i_i_i"
+  "qc_qc_qc"
+  "qm_qm_qm"
+  "d_d_d"
 )
 
 # Optional arguments passed to every subtask_hetro.py judge invocation.

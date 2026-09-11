@@ -31,9 +31,12 @@ def test_unknown_registry_is_not_assigned_to_a_benchmark():
 def test_passive_monitor_records_repeated_fields_without_mutating_response():
     tokenizer = CharacterTokenizer()
     text = (
+        'PLANNING_REASONING agent":"reasoning_agent" '
+        'END_PLANNING_REASONING\nPLAN_JSON\n['
         'agent":"search_agent","next":'
         'agent":"search_agent","last":'
         'agent":"calculation_agent"'
+        ']\nEND_PLAN_JSON'
     )
     prompt_length = 2
     gen_length = len(text) + 8
@@ -77,7 +80,7 @@ def test_passive_monitor_records_repeated_fields_without_mutating_response():
 
 def test_step_callback_records_name_immediately_after_decoder_update():
     tokenizer = CharacterTokenizer()
-    text = 'agent":"reasoning_agent"'
+    text = 'PLAN_JSON\n[agent":"reasoning_agent"]\nEND_PLAN_JSON'
     monitor = PassiveJsonAgentMonitor(
         tokenizer=tokenizer,
         config=JsonAgentPriorityConfig(
@@ -104,3 +107,44 @@ def test_step_callback_records_name_immediately_after_decoder_update():
     slot = monitor.metrics()["agent_slots"][0]
     assert slot["agent"] == "reasoning_agent"
     assert slot["recognized_step"] == 3
+
+
+def test_agent_fields_outside_plan_json_are_not_recorded():
+    tokenizer = CharacterTokenizer()
+    text = (
+        'PLANNING_REASONING {"agent":"evidence_agent"} '
+        'END_PLANNING_REASONING\nPLAN_JSON\n'
+        '[{"agent":"temporal_agent"}]\nEND_PLAN_JSON\n'
+        '{"agent":"verification_agent"}'
+    )
+    monitor = PassiveJsonAgentMonitor(
+        tokenizer=tokenizer,
+        config=JsonAgentPriorityConfig(
+            catalog=(
+                "evidence_agent",
+                "temporal_agent",
+                "verification_agent",
+            ),
+            priority_slots=3,
+            tracking_slots=8,
+        ),
+        prompt_length=1,
+        gen_length=len(text),
+        mask_id=tokenizer.mask_token_id,
+    )
+    x = torch.full(
+        (1, 1 + len(text)),
+        tokenizer.mask_token_id,
+        dtype=torch.long,
+    )
+    x[0, 1:] = torch.tensor(tokenizer.encode(text))
+    monitor.initialize(x)
+
+    monitor.observe(None, x, 0, 4)
+
+    recognized = [
+        slot["agent"]
+        for slot in monitor.metrics()["agent_slots"]
+        if slot["agent"] is not None
+    ]
+    assert recognized == ["temporal_agent"]

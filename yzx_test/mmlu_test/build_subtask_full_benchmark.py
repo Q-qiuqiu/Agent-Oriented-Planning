@@ -72,12 +72,12 @@ END_PLAN_JSON
 
 CONFIG = {
     "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llama3.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llama3.json",
-    "planner_api_url": "http://10.137.144.97:7002/v1",
+    "plans_output": "benchmarks/mmlu/mmlu_plans_base_full_llada.json",
+    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_base_full_llada.json",
+    "planner_api_url": "http://10.137.144.97:7004/v1",
     "planner_api_key": "empty",
-    #"planner_model": "/data/labshare/Param/llada",
-    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "planner_model": "/data/labshare/Param/llada",
+    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,

@@ -9,7 +9,7 @@ from prompt import summarization_agent_prompt
 
 MODEL_SIZE = "1b"
 AGENT_ASSIGNMENT = "f_q_m"
-PLAN_VARIANT = "full_llada"
+PLAN_VARIANT = "base_llama3"
 RESULTS_DIR = f"iirc_test/results_{MODEL_SIZE}_{PLAN_VARIANT}"
 SUMMARY_PROMPT_VERSION = "iirc_compact_summary_v2"
 
@@ -21,10 +21,10 @@ CONFIG = {
     "limit": None,
     "output": f"{RESULTS_DIR}/summary_result_{AGENT_ASSIGNMENT}.json",
     "force": False,
-    "summary_api_url": "http://10.137.144.97:7004/v1",
+    "summary_api_url": "http://10.137.144.97:7002/v1",
     "summary_api_key": "empty",
-    #"summary_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
-    "summary_model": "/data/labshare/Param/llada",
+    "summary_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"summary_model": "/data/labshare/Param/llada",
     #"summary_model": "/mnt/home/yzx/models/LLADA/",
     "summary_temperature": 0.0,
     "summary_timeout": 180,

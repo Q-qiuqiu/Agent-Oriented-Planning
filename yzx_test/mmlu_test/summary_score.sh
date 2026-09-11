@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llada"
+PLAN_VARIANT="base_llama3"
 
 # MMLU-Pro uses option exact match, so no external Judge configuration is needed.
 ASSIGNMENTS=(

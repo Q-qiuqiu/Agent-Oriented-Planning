@@ -35,7 +35,7 @@ def main():
     RESULTS_DIR = f"mmlu_test/results_{args.model_size}_{args.plan_variant}"
     args.input = args.input or f"{RESULTS_DIR}/summary_result_{args.assignment}.json"
     args.output = args.output or (
-        f"{RESULTS_DIR}/summary_evaluate_{args.assignment}.json"
+        f"{RESULTS_DIR}/summary_score_{args.assignment}.json"
     )
 
     with Path(args.input).open("r", encoding="utf-8") as file:

@@ -192,7 +192,7 @@ register_model \
 register_model \
     "llama3-1b" \
     "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct" \
-    "7021" "1" "16384" "0.4" \
+    "7021" "1" "16384" "0.3" \
     "hermes" "true" "false" ""
 register_model \
     "gemma3-1b" \
@@ -219,7 +219,7 @@ register_model \
 register_model \
     "minicpm5-1b" \
     "/data/labshare/Param/MiniCPM5-1B" \
-    "7026" "1" "16384" "0.4" \
+    "7026" "1" "16384" "0.3" \
     "" "false" "false" \
     "--chat-template /data/labshare/Param/MiniCPM5-1B/minicpm5_nonthinking.jinja"
 register_model \
@@ -231,12 +231,12 @@ register_model \
 register_model \
     "qwen2.5-math-1.5b" \
     "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct" \
-    "7028" "1" "4096" "0.4" \
+    "7028" "1" "4096" "0.3" \
     "" "false" "false" ""
 register_model \
     "qwen2.5-coder-1.5b" \
     "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct" \
-    "7029" "1" "16384" "0.4" \
+    "7029" "1" "16384" "0.3" \
     "" "false" "false" ""
 register_model \
     "internlm2.5-1.8b" \

@@ -73,8 +73,10 @@ base_chronoqa_full_timings.jsonl
 Each record contains total `generation_seconds` and one entry per observed
 Agent occurrence, including `first_observed_seconds`, `decision_seconds`, and
 the diffusion step. These are real observation times from the generation loop,
-not estimates based on the final token positions. Monitoring overhead is part
-of `generation_seconds` and is marked by
+not estimates based on the final token positions. Only JSON `agent` fields
+between `PLAN_JSON` and `END_PLAN_JSON` are counted; Agent names mentioned in
+planning reasoning are ignored. Monitoring overhead is part of
+`generation_seconds` and is marked by
 `monitor_overhead_included: true`. Disable it for an uninstrumented baseline:
 
 ```bash

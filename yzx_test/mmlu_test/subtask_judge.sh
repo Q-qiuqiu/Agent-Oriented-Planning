@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llama3"
+PLAN_VARIANT="base_llada"
 
 # MMLU-Pro uses option exact match, so no external Judge API is required.
 ASSIGNMENTS=(
@@ -10,11 +10,11 @@ ASSIGNMENTS=(
   "q_q_q"
   "l_l_l"
   "m_m_m"
-  # "s_s_s"
-  # "i_i_i"
-  # "qc_qc_qc"
-  # "qm_qm_qm"
-  # "d_d_d"
+  "s_s_s"
+  "i_i_i"
+  "qc_qc_qc"
+  "qm_qm_qm"
+  "d_d_d"
 )
 
 # Optional arguments passed to every subtask_hetro.py judge invocation.

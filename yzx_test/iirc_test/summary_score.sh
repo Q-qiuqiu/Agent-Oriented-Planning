@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="full_llama3"
+PLAN_VARIANT="base_llama3"
 
 # Judge API configuration. These values override summary_score.py.
 #JUDGE_API_URL="http://222.30.44.50:45104/v1/chat/completions"
@@ -14,15 +14,15 @@ JUDGE_TEMPERATURE="0.0"
 JUDGE_TIMEOUT="120"
 
 ASSIGNMENTS=(
-  # "g_g_g"
-  # "l_l_l"
-  "m_m_m"
-  # "q_q_q"
-  # "d_d_d"
-  # "qm_qm_qm"
-  # "qc_qc_qc"
-  # "i_i_i"
+  "g_g_g"
+  "l_l_l"
+  "q_q_q"
+  "d_d_d"
+  "qm_qm_qm"
+  "qc_qc_qc"
+  "i_i_i"
   "s_s_s"
+  "m_m_m"
 )
 
 SCORE_ARGS=(
