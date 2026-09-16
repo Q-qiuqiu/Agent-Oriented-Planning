@@ -2,18 +2,19 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="base_llama3"
+PLAN_VARIANT="base_llada"
 
 # Summary API configuration. These values override summary_evaluate.py.
-SUMMARY_API_URL="http://10.137.144.97:7002/v1"
+SUMMARY_API_URL="http://10.137.144.97:7010/v1"
 SUMMARY_API_KEY="empty"
 #SUMMARY_MODEL="/mnt/home/yzx/models/LLADA/"
-SUMMARY_MODEL="/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct"
+SUMMARY_MODEL="/data/labshare/Param/llada"
+#SUMMARY_MODEL="/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct"
 
 SUMMARY_TEMPERATURE="0.0"
 SUMMARY_TIMEOUT="120"
 
-# Run these assignments sequentially. Edit this list for each experiment batch.
+# Runs sequentially by default; pass --batch to run this list concurrently.
 ASSIGNMENTS=(
   "q_q_q"
   "g_g_g"
@@ -37,6 +38,8 @@ TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
+parse_assignment_batch_args "$@"
+
 echo "Batch configuration"
 echo "  benchmark=huskyqa"
 echo "  stage=summary_evaluate"
@@ -46,7 +49,15 @@ echo "  results_dir=huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
 echo "  assignments=${ASSIGNMENTS[*]}"
 echo "  summary_model=${SUMMARY_MODEL}"
 echo "  summary_api_url=${SUMMARY_API_URL}"
+echo "  execution_mode=${ASSIGNMENT_BATCH_MODE}"
 echo "====================="
+
+if assignment_batch_is_parallel_parent; then
+  run_assignment_scripts_parallel \
+    "${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")" \
+    "${ASSIGNMENTS[@]}"
+  exit $?
+fi
 
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"

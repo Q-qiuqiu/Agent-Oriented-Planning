@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="base_llama3"
+PLAN_VARIANT="base_llada"
 
 # Judge API configuration. These values override subtask_hetro.py.
 JUDGE_API_URL="http://10.137.144.97:7001/v1"
@@ -13,7 +13,7 @@ JUDGE_MODEL="/data/labshare/Param/Qwen/Qwen3-30B-A3B-Instruct-2507"
 JUDGE_TEMPERATURE="0.0"
 JUDGE_TIMEOUT="120"
 
-# Run assignments sequentially. Edit this list for each experiment batch.
+# Runs sequentially by default; pass --batch to run this list concurrently.
 ASSIGNMENTS=(
   "g_g_g"
   "l_l_l"
@@ -37,6 +37,8 @@ TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
+parse_assignment_batch_args "$@"
+
 echo "Batch configuration"
 echo "  benchmark=huskyqa"
 echo "  stage=subtask_judge"
@@ -46,7 +48,15 @@ echo "  results_dir=huskyqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
 echo "  assignments=${ASSIGNMENTS[*]}"
 echo "  judge_model=${JUDGE_MODEL}"
 echo "  judge_api_url=${JUDGE_API_URL}"
+echo "  execution_mode=${ASSIGNMENT_BATCH_MODE}"
 echo "====================="
+
+if assignment_batch_is_parallel_parent; then
+  run_assignment_scripts_parallel \
+    "${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")" \
+    "${ASSIGNMENTS[@]}"
+  exit $?
+fi
 
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"

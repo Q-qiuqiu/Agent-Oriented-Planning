@@ -12,7 +12,7 @@ trap handle_interrupt INT TERM
 MODEL_SIZE="1b"
 PLAN_VARIANT="base_llada"
 
-# Run assignments sequentially. Keep this list aligned with later pipeline stages.
+# Runs sequentially by default; pass --batch to run this list concurrently.
 ASSIGNMENTS=(
   "q_q_q"
   "g_g_g"
@@ -36,6 +36,8 @@ TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
+parse_assignment_batch_args "$@"
+
 echo "Batch configuration"
 echo "  benchmark=mmlu"
 echo "  stage=subtask_respond"
@@ -43,7 +45,15 @@ echo "  model_size=${MODEL_SIZE}"
 echo "  plan_variant=${PLAN_VARIANT}"
 echo "  results_dir=mmlu_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
 echo "  assignments=${ASSIGNMENTS[*]}"
+echo "  execution_mode=${ASSIGNMENT_BATCH_MODE}"
 echo "====================="
+
+if assignment_batch_is_parallel_parent; then
+  run_assignment_scripts_parallel \
+    "${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")" \
+    "${ASSIGNMENTS[@]}"
+  exit $?
+fi
 
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"

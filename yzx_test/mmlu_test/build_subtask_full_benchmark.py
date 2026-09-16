@@ -72,9 +72,9 @@ END_PLAN_JSON
 
 CONFIG = {
     "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_base_full_llada.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_base_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7004/v1",
+    "plans_output": "benchmarks/mmlu/mmlu_plans_full_llada_improve.json",
+    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_full_llada_improve.json",
+    "planner_api_url": "http://10.137.144.97:7006/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llada",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",

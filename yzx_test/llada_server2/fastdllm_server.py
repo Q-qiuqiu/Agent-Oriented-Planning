@@ -1,8 +1,7 @@
-"""Instrumented baseline HTTP server for Fast-dLLM v1 LLaDA inference.
+"""OpenAI-compatible HTTP server for Fast-dLLM v1 LLaDA inference.
 
 The LLaDA decoder produces a complete masked-diffusion result rather than stable
 autoregressive tokens, so this server intentionally rejects ``stream=true``.
-Agent names are observed passively; normal decoding output is never modified.
 """
 
 import argparse
@@ -14,7 +13,6 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import torch
@@ -25,11 +23,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import AutoTokenizer
 
-from base_agent_timing import AgentTimingRecorder
 from generate import generate, generate_with_dual_cache, generate_with_prefix_cache
-from json_agent_priority import JsonAgentPriorityConfig, extract_agent_registry
 from model.modeling_llada import LLaDAModelLM
-from response_agent_timing import PassiveJsonAgentMonitor, infer_benchmark
 
 
 # Default to the original total diffusion-step count. The server CLI can
@@ -44,10 +39,6 @@ DTYPE = os.getenv("FASTDLLM_DTYPE", "bfloat16")
 API_KEY = os.getenv("FASTDLLM_API_KEY")
 LOG_LEVEL = os.getenv("FASTDLLM_LOG_LEVEL", "info")
 LOGGER = logging.getLogger("uvicorn.error")
-DEFAULT_AGENT_TIMING_LOG_DIR = os.getenv(
-    "FASTDLLM_AGENT_TIMING_LOG_DIR",
-    str(Path(__file__).resolve().parent.parent / "benchmarks" / "fastdllm_log"),
-)
 
 
 class TextContentPart(BaseModel):
@@ -94,11 +85,6 @@ class ServerConfig:
     threshold: Optional[float]
     debug: bool
     api_key: Optional[str]
-    agent_slots: int
-    agent_timing_slots: int
-    agent_names: List[str]
-    agent_timing_log_dir: str
-    record_agent_timings: bool
 
 
 class LLaDARuntime:
@@ -108,7 +94,6 @@ class LLaDARuntime:
         self.tokenizer = None
         self.model = None
         self.lock: Optional[asyncio.Lock] = None
-        self.timing_recorders: Dict[str, AgentTimingRecorder] = {}
 
     def _torch_dtype(self):
         if self.config.dtype == "auto":
@@ -167,70 +152,6 @@ class LLaDARuntime:
             raise ValueError("At least one user message is required.")
         return normalized
 
-    @staticmethod
-    def _query_text(messages: List[Dict[str, str]]) -> str:
-        for message in reversed(messages):
-            if message.get("role") == "user":
-                return str(message.get("content") or "")
-        return ""
-
-    def _timing_recorder(self, benchmark: str) -> AgentTimingRecorder:
-        recorder = self.timing_recorders.get(benchmark)
-        if recorder is None:
-            log_path = (
-                Path(self.config.agent_timing_log_dir)
-                / f"base_{benchmark}_full_timings.jsonl"
-            )
-            recorder = AgentTimingRecorder(str(log_path))
-            self.timing_recorders[benchmark] = recorder
-        return recorder
-
-    def record_agent_timing(
-        self,
-        *,
-        completion_id: str,
-        created: int,
-        request: ChatCompletionRequest,
-        metrics: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        if not self.config.record_agent_timings:
-            return
-        try:
-            messages = self._prepare_messages(request.messages)
-            registry = extract_agent_registry(messages, self.config.agent_names)
-            benchmark = infer_benchmark(registry)
-            if benchmark is None:
-                return
-            timing_metrics = dict(metrics or {})
-            timing_metrics.setdefault(
-                "agent_priority",
-                {
-                    "policy": "base",
-                    "timing_source": "passive_materialized_response",
-                    "priority_slots": self.config.agent_slots,
-                    "tracking_slots": self.config.agent_timing_slots,
-                    "catalog": registry,
-                    "agent_slots": [],
-                },
-            )
-            self._timing_recorder(benchmark).record(
-                completion_id=completion_id,
-                created_unix=created,
-                query=self._query_text(messages),
-                model=request.model,
-                temperature=request.temperature,
-                requested_max_tokens=(
-                    request.max_completion_tokens or request.max_tokens
-                ),
-                metrics=timing_metrics,
-                error=error,
-            )
-        except Exception:
-            LOGGER.exception(
-                "Failed to persist passive Agent timing for %s", completion_id
-            )
-
     def _effective_lengths(self, requested_tokens: Optional[int]) -> Tuple[int, int, int]:
         visible_tokens = requested_tokens or self.config.gen_length
         if visible_tokens > self.config.gen_length:
@@ -283,10 +204,6 @@ class LLaDARuntime:
         requested_tokens = request.max_completion_tokens or request.max_tokens
         visible_tokens, gen_length, steps = self._effective_lengths(requested_tokens)
         messages = self._prepare_messages(request.messages)
-        request_agent_names = extract_agent_registry(
-            messages, self.config.agent_names
-        )
-        timing_benchmark = infer_benchmark(request_agent_names)
         rendered_prompt = self.tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -344,19 +261,6 @@ class LLaDARuntime:
             "dual": generate_with_dual_cache,
         }[self.config.cache_mode]
         mask_id = self.tokenizer.mask_token_id or 126336
-        monitor = None
-        if self.config.record_agent_timings and timing_benchmark is not None:
-            monitor = PassiveJsonAgentMonitor(
-                tokenizer=self.tokenizer,
-                config=JsonAgentPriorityConfig(
-                    catalog=request_agent_names,
-                    priority_slots=self.config.agent_slots,
-                    tracking_slots=self.config.agent_timing_slots,
-                ),
-                prompt_length=input_ids.shape[1],
-                gen_length=gen_length,
-                mask_id=mask_id,
-            )
         torch.cuda.synchronize(self.device)
         started_at = time.perf_counter()
         with torch.inference_mode():
@@ -370,10 +274,6 @@ class LLaDARuntime:
                 remasking="low_confidence",
                 mask_id=mask_id,
                 threshold=self.config.threshold,
-                agent_controller=monitor,
-                step_callback=(
-                    monitor.step_callback if monitor is not None else None
-                ),
             )
         torch.cuda.synchronize(self.device)
         elapsed = time.perf_counter() - started_at
@@ -424,7 +324,6 @@ class LLaDARuntime:
         metrics = {
             "nfe": int(nfe),
             "generation_time": elapsed,
-            "generation_seconds": elapsed,
 
             # 固定生成槽位速度
             "slot_tps": visible_tokens / elapsed if elapsed > 0 else 0.0,
@@ -434,17 +333,11 @@ class LLaDARuntime:
 
             "generated_slots": visible_tokens,
             "useful_tokens": completion_tokens,
-            "generated_tokens": completion_tokens,
-            "returned_tokens": completion_tokens,
-            "tps": completion_tokens / elapsed if elapsed > 0 else 0.0,
             "steps": steps,
             "block_size": self.config.block_size,
             "cache_mode": self.config.cache_mode,
             "threshold": self.config.threshold,
         }
-        if monitor is not None:
-            metrics["agent_priority"] = monitor.metrics()
-            metrics["timing_benchmark"] = timing_benchmark
         return content, finish_reason, usage, metrics
 
 
@@ -495,7 +388,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="Fast-dLLM v1 LLaDA monitored baseline API",
+    title="Fast-dLLM v1 LLaDA OpenAI-compatible API",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -588,8 +481,6 @@ async def chat_completions(payload: ChatCompletionRequest, request: Request):
 
     debug = current_runtime.config.debug
     request_id = f"req-{uuid.uuid4().hex[:16]}" if debug else None
-    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-    created = int(time.time())
     request_started_at = time.perf_counter()
     if debug:
         message_chars = sum(
@@ -624,12 +515,6 @@ async def chat_completions(payload: ChatCompletionRequest, request: Request):
                 request_id,
             )
     except ValueError as exc:
-        current_runtime.record_agent_timing(
-            completion_id=completion_id,
-            created=created,
-            request=payload,
-            error=f"{type(exc).__name__}: {exc}",
-        )
         if debug:
             LOGGER.warning(
                 "inference_rejected request_id=%s elapsed_seconds=%.6f "
@@ -648,12 +533,6 @@ async def chat_completions(payload: ChatCompletionRequest, request: Request):
             ),
         ) from exc
     except RuntimeError as exc:
-        current_runtime.record_agent_timing(
-            completion_id=completion_id,
-            created=created,
-            request=payload,
-            error=f"{type(exc).__name__}: {exc}",
-        )
         if debug:
             LOGGER.exception(
                 "inference_failed request_id=%s elapsed_seconds=%.6f "
@@ -673,12 +552,6 @@ async def chat_completions(payload: ChatCompletionRequest, request: Request):
             ),
         ) from exc
     except Exception as exc:
-        current_runtime.record_agent_timing(
-            completion_id=completion_id,
-            created=created,
-            request=payload,
-            error=f"{type(exc).__name__}: {exc}",
-        )
         if not debug:
             raise
         LOGGER.exception(
@@ -695,12 +568,8 @@ async def chat_completions(payload: ChatCompletionRequest, request: Request):
             detail=f"request_id={request_id} {type(exc).__name__}: {exc}",
         ) from exc
 
-    current_runtime.record_agent_timing(
-        completion_id=completion_id,
-        created=created,
-        request=payload,
-        metrics=metrics,
-    )
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
     if debug:
         LOGGER.info(
             "inference_completed request_id=%s elapsed_seconds=%.6f "
@@ -748,10 +617,7 @@ def parse_optional_float(value: str) -> Optional[float]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Serve an instrumented Fast-dLLM v1 LLaDA baseline through an "
-            "OpenAI-compatible API."
-        )
+        description="Serve Fast-dLLM v1 LLaDA through an OpenAI-compatible API."
     )
     parser.add_argument(
         "--cache-mode",
@@ -783,37 +649,6 @@ def parse_args() -> argparse.Namespace:
             "timings, and full inference exception tracebacks."
         ),
     )
-    parser.add_argument(
-        "--agent-slots",
-        type=int,
-        default=3,
-        help="Number of leading Agent occurrences reported as prefetch slots.",
-    )
-    parser.add_argument(
-        "--agent-timing-slots",
-        type=int,
-        default=3,
-        help="Maximum number of Agent occurrences monitored in one response.",
-    )
-    parser.add_argument(
-        "--agent-names",
-        default="",
-        help=(
-            "Comma-separated fallback Agent registry. Normally the registry is "
-            "read automatically from the planner system prompt."
-        ),
-    )
-    parser.add_argument(
-        "--agent-timing-log-dir",
-        default=DEFAULT_AGENT_TIMING_LOG_DIR,
-        help="Directory for base_<benchmark>_full_timings.jsonl files.",
-    )
-    parser.add_argument(
-        "--record-agent-timings",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Passively monitor and persist Agent-name materialization times.",
-    )
     return parser.parse_args()
 
 
@@ -826,12 +661,6 @@ def validate_config(args: argparse.Namespace) -> None:
         raise ValueError("steps must be greater than zero.")
     if args.threshold is not None and not 0.0 <= args.threshold <= 1.0:
         raise ValueError("threshold must be between 0 and 1, or 'none'.")
-    if args.agent_slots <= 0:
-        raise ValueError("agent-slots must be greater than zero.")
-    if args.agent_timing_slots < args.agent_slots:
-        raise ValueError("agent-timing-slots must be at least agent-slots.")
-    if args.record_agent_timings and not str(args.agent_timing_log_dir).strip():
-        raise ValueError("agent-timing-log-dir cannot be empty.")
     if args.gen_length % args.block_size != 0:
         raise ValueError("gen-length must be divisible by block-size.")
     num_blocks = args.gen_length // args.block_size
@@ -846,11 +675,6 @@ def main() -> None:
     global runtime
     args = parse_args()
     validate_config(args)
-    agent_names = [
-        name.strip()
-        for name in str(args.agent_names).split(",")
-        if name.strip()
-    ]
     runtime = LLaDARuntime(
         ServerConfig(
             model_path=MODEL_PATH,
@@ -864,11 +688,6 @@ def main() -> None:
             threshold=args.threshold,
             debug=args.debug,
             api_key=API_KEY,
-            agent_slots=args.agent_slots,
-            agent_timing_slots=args.agent_timing_slots,
-            agent_names=agent_names,
-            agent_timing_log_dir=args.agent_timing_log_dir,
-            record_agent_timings=args.record_agent_timings,
         )
     )
     uvicorn.run(

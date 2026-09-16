@@ -74,9 +74,9 @@ Use each marker exactly once. Do not use Markdown fences.
 
 CONFIG = {
     "input": "benchmarks/iirc/iirc_dev_flat.json",
-    "plans_output": "benchmarks/iirc/iirc_plans_base_full_llada.json",
-    "benchmark_output": "benchmarks/iirc/iirc_subtask_base_full_llada.json",
-    "planner_api_url": "http://10.137.144.97:7004/v1",
+    "plans_output": "benchmarks/iirc/iirc_plans_full_llada_improve.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_full_llada_improve.json",
+    "planner_api_url": "http://10.137.144.97:7005/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llada",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",

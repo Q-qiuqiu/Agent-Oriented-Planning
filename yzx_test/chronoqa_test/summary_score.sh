@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="base_llama3"
+PLAN_VARIANT="base_llada"
 
 # Judge API configuration. These values override summary_score.py.
 JUDGE_API_URL="http://10.137.144.97:7001/v1"
@@ -35,6 +35,8 @@ TEST_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 source "${TEST_ROOT}/batch_output.sh"
 cd "${TEST_ROOT}"
 
+parse_assignment_batch_args "$@"
+
 echo "Batch configuration"
 echo "  benchmark=chronoqa"
 echo "  stage=summary_score"
@@ -44,7 +46,15 @@ echo "  results_dir=chronoqa_test/results_${MODEL_SIZE}_${PLAN_VARIANT}"
 echo "  assignments=${ASSIGNMENTS[*]}"
 echo "  judge_model=${JUDGE_MODEL}"
 echo "  judge_api_url=${JUDGE_API_URL}"
+echo "  execution_mode=${ASSIGNMENT_BATCH_MODE}"
 echo "====================="
+
+if assignment_batch_is_parallel_parent; then
+  run_assignment_scripts_parallel \
+    "${SCRIPT_DIR}/$(basename -- "${BASH_SOURCE[0]}")" \
+    "${ASSIGNMENTS[@]}"
+  exit $?
+fi
 
 for index in "${!ASSIGNMENTS[@]}"; do
   assignment="${ASSIGNMENTS[$index]}"

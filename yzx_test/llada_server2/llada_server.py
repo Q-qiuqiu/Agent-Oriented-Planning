@@ -1,4 +1,4 @@
-"""OpenAI-compatible API server for MASK_SLOT-accelerated LLaDA planning."""
+"""OpenAI-compatible LLaDA server with read-only early Agent prediction."""
 
 import argparse
 import asyncio
@@ -27,6 +27,7 @@ from json_agent_priority import (
     JsonAgentPriorityConfig,
     extract_agent_registry,
 )
+from marginal_agent_priority import MarginalizedAgentFieldController
 from model.modeling_llada import LLaDAModelLM
 from planner_json_repair import repair_plan_json_response
 from planner_policy import apply_planner_prompt_policy
@@ -267,7 +268,12 @@ class LLaDAPlannerRuntime:
         mask_id = self.tokenizer.mask_token_id or 126336
         controller = None
         if self.config.policy in {"planreason", "reasonplan"}:
-            controller = JsonAgentFieldController(
+            controller_class = (
+                MarginalizedAgentFieldController
+                if self.config.policy == "reasonplan"
+                else JsonAgentFieldController
+            )
+            controller = controller_class(
                 tokenizer=self.tokenizer,
                 config=JsonAgentPriorityConfig(
                     catalog=request_agent_names,
@@ -375,7 +381,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Fast-dLLM LLaDA OpenAI API", lifespan=lifespan)
+app = FastAPI(title="Fast-dLLM LLaDA Agent Prefetch API v2", lifespan=lifespan)
 
 
 def check_authorization(request: Request):
@@ -598,13 +604,13 @@ def parse_args():
     parser.add_argument(
         "--policy",
         choices=("raw", "mid", "planreason", "reasonplan"),
-        default="planreason",
+        default="reasonplan",
         help=(
             "raw=unchanged prompt; mid=plan-first planner prompt without Agent "
             "priority; planreason=plan-first Agent-priority decoding (formerly "
             "now); reasonplan=preserve the caller's reasoning-first prompt and "
-            "use full-sequence logits to recognize later PLAN Agent fields as "
-            "early as confidence permits."
+            "use position-marginalized temporal evidence to recognize later "
+            "PLAN Agent fields without modifying normal decoding."
         ),
     )
     parser.add_argument("--api_key", default=None)

@@ -76,8 +76,8 @@ FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + "\n\n" + FULL_OUTPUT_BLOCK
 # Edit these defaults directly before running the script.
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
-    "plans_output": "benchmarks/huskyqa/huskyqa_plans_base_full_llada.json",
-    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_abse_full_llada.json",
+    "plans_output": "benchmarks/huskyqa/huskyqa_plans_full_llada_improve.json",
+    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_full_llada_improve.json",
     "planner_api_url": "http://10.137.144.97:7004/v1",
     "planner_api_key": "empty",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
