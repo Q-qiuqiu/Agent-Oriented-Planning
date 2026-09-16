@@ -257,6 +257,11 @@ class AgentTimingRecorder:
             "priority_slots": priority.get("priority_slots"),
             "tracking_slots": priority.get("tracking_slots"),
             "agent_prediction_method": priority.get("method"),
+            "agent_probability_threshold": priority.get(
+                "probability_threshold"
+            ),
+            "agent_margin_threshold": priority.get("margin_threshold"),
+            "agent_name_stable_steps": priority.get("name_stable_steps"),
             "prediction_checked_count": priority.get("prediction_checked_count"),
             "prediction_correct_count": priority.get("prediction_correct_count"),
             "prediction_accuracy": priority.get("prediction_accuracy"),
@@ -267,7 +272,16 @@ class AgentTimingRecorder:
                 "sequence_consistent_steps"
             ),
             "prefetch_switch_count": priority.get("prefetch_switch_count"),
+            "last_agent_correction_seconds": priority.get(
+                "last_agent_correction_seconds"
+            ),
             "all_final_agents_seconds": priority.get("all_final_agents_seconds"),
+            "effective_all_agents_ready_seconds": priority.get(
+                "effective_all_agents_ready_seconds"
+            ),
+            "effective_prefetch_lead_seconds": priority.get(
+                "effective_prefetch_lead_seconds"
+            ),
             "all_priority_agents_recognized": priority.get(
                 "all_priority_agents_recognized"
             ),

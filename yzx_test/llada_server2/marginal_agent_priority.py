@@ -2,15 +2,14 @@
 
 The normal JSON controller associates a slot with one absolute token position.
 That is a poor fit for ``reasonplan`` because the still-masked reasoning prefix
-causes future JSON fields to move between denoising observations.  This module
-instead marginalizes over plausible JSON-field positions, accumulates evidence
-by occurrence rank, and reports the first three Agent names without modifying
-the generated token canvas.
+causes future JSON fields to move between denoising observations. This module
+chooses JSON-field positions from structural evidence, then predicts every
+Agent slot independently. Agent probabilities from one slot never participate
+in another slot's decision.
 """
 
 from __future__ import annotations
 
-import itertools
 import json
 import logging
 import math
@@ -32,11 +31,8 @@ LOGGER = logging.getLogger("fastdllm.agent_priority")
 # These are method constants, not resource-scheduling parameters.  The policy
 # always predicts the first ``priority_slots`` Agent calls in response order.
 MAX_POSITION_CANDIDATES = 18
-JOINT_LAYOUT_BEAM = 64
 TEMPORAL_EMA_PREVIOUS_WEIGHT = 0.60
-FORCED_PREFETCH_OBSERVATIONS = 3
 MIN_ABSOLUTE_NAME_MARGIN = -4.0
-EPSILON = 1e-8
 
 
 @dataclass
@@ -51,16 +47,9 @@ class PositionCandidate:
 
 
 @dataclass
-class SequenceInference:
-    sequence_distribution: Dict[Tuple[str, ...], float]
+class IndependentSlotInference:
     slot_distributions: List[Dict[str, float]]
-    best_sequence: Tuple[str, ...]
-    best_sequence_probability: float
-    best_sequence_margin: float
-    best_layout: Tuple[PositionCandidate, ...]
-    best_layout_by_sequence: Dict[
-        Tuple[str, ...], Tuple[PositionCandidate, ...]
-    ]
+    slot_positions: List[PositionCandidate]
     supporting_positions: List[List[int]]
 
 
@@ -87,14 +76,9 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
         self.slots = [
             MarginalizedSlotRuntime() for _ in range(self.tracking_slots)
         ]
-        self._temporal_sequence_distribution: Optional[
-            Dict[Tuple[str, ...], float]
-        ] = None
-        self._sequence_candidate: Optional[Tuple[str, ...]] = None
-        self._sequence_consistent_steps = 0
-        self._sequence_probability = 0.0
-        self._sequence_margin = 0.0
-        self._last_sequence_inference: Optional[SequenceInference] = None
+        self._temporal_slot_distributions: List[Optional[Dict[str, float]]] = [
+            None for _ in range(self.config.priority_slots)
+        ]
 
     def _all_anchor_candidates(
         self,
@@ -243,8 +227,7 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
         name_score = float(
             (target_best - field_logits.amax(dim=-1)).mean().detach().cpu()
         )
-        # Agent identity is scored later as part of a complete sequence. Keep
-        # layout validity independent from whichever catalog entry wins locally.
+        # Layout validity remains independent from whichever Agent wins locally.
         layout_score = (
             anchor_score
             + 0.35 * name_score
@@ -260,139 +243,61 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
             layout_score=layout_score,
         )
 
-    @staticmethod
-    def _logaddexp(left: Optional[float], right: float) -> float:
-        if left is None:
-            return right
-        maximum = max(left, right)
-        return maximum + math.log(
-            math.exp(left - maximum) + math.exp(right - maximum)
-        )
-
-    def _joint_sequence_inference(
+    def _independent_slot_inference(
         self,
         candidates: Sequence[PositionCandidate],
-    ) -> Optional[SequenceInference]:
-        """Infer one complete Agent sequence across uncertain field layouts."""
+    ) -> Optional[IndependentSlotInference]:
+        """Choose field positions structurally and score each slot separately."""
 
         slot_count = self.config.priority_slots
         if len(candidates) < slot_count:
             return None
 
-        layouts = []
-        for combination in itertools.combinations(candidates, slot_count):
+        ranked = sorted(candidates, key=lambda item: item.layout_score, reverse=True)
+        selected: List[PositionCandidate] = []
+        for candidate in ranked:
             if any(
-                right.anchor_start - left.anchor_start < self.config.min_anchor_gap
-                for left, right in zip(combination, combination[1:])
+                abs(candidate.anchor_start - existing.anchor_start)
+                < self.config.min_anchor_gap
+                for existing in selected
             ):
                 continue
-            layouts.append((sum(item.layout_score for item in combination), combination))
-        if not layouts:
+            selected.append(candidate)
+            if len(selected) == slot_count:
+                break
+        if len(selected) != slot_count:
             return None
-        layouts.sort(key=lambda item: item[0], reverse=True)
-        layouts = layouts[:JOINT_LAYOUT_BEAM]
 
-        sequences = list(itertools.product(self.catalog_names, repeat=slot_count))
-        sequence_log_scores: Dict[Tuple[str, ...], float] = {}
-        best_layout_by_sequence: Dict[
-            Tuple[str, ...], Tuple[float, Tuple[PositionCandidate, ...]]
-        ] = {}
-        for layout_score, layout in layouts:
-            for sequence in sequences:
-                joint_score = layout_score + sum(
-                    math.log(max(candidate.distribution[agent], EPSILON))
-                    for candidate, agent in zip(layout, sequence)
-                )
-                sequence_log_scores[sequence] = self._logaddexp(
-                    sequence_log_scores.get(sequence), joint_score
-                )
-                previous = best_layout_by_sequence.get(sequence)
-                if previous is None or joint_score > previous[0]:
-                    best_layout_by_sequence[sequence] = (joint_score, layout)
-
-        maximum = max(sequence_log_scores.values())
-        weights = {
-            sequence: math.exp(score - maximum)
-            for sequence, score in sequence_log_scores.items()
-        }
-        total = sum(weights.values())
-        distribution = {
-            sequence: weight / total for sequence, weight in weights.items()
-        }
-        ranked = sorted(
-            distribution.items(), key=lambda item: item[1], reverse=True
-        )
-        best_sequence, best_probability = ranked[0]
-        second_probability = ranked[1][1] if len(ranked) > 1 else 0.0
-        best_layout = best_layout_by_sequence[best_sequence][1]
-
-        slot_distributions = [
-            {name: 0.0 for name in self.catalog_names}
-            for _ in range(slot_count)
-        ]
-        for sequence, probability in distribution.items():
-            for slot_index, agent in enumerate(sequence):
-                slot_distributions[slot_index][agent] += probability
-        supporting_positions = [
-            sorted({layout[slot_index].anchor_start for _, layout in layouts})
-            for slot_index in range(slot_count)
-        ]
-        return SequenceInference(
-            sequence_distribution=distribution,
-            slot_distributions=slot_distributions,
-            best_sequence=best_sequence,
-            best_sequence_probability=best_probability,
-            best_sequence_margin=best_probability - second_probability,
-            best_layout=best_layout,
-            best_layout_by_sequence={
-                sequence: value[1]
-                for sequence, value in best_layout_by_sequence.items()
-            },
-            supporting_positions=supporting_positions,
+        selected.sort(key=lambda item: item.anchor_start)
+        return IndependentSlotInference(
+            slot_distributions=[dict(item.distribution) for item in selected],
+            slot_positions=selected,
+            supporting_positions=[[item.anchor_start] for item in selected],
         )
 
-    def _temporal_sequence_inference(
-        self, current: SequenceInference
-    ) -> SequenceInference:
-        if self._temporal_sequence_distribution is None:
-            smoothed = dict(current.sequence_distribution)
-        else:
-            smoothed = {
-                sequence: TEMPORAL_EMA_PREVIOUS_WEIGHT
-                * self._temporal_sequence_distribution.get(sequence, 0.0)
-                + (1.0 - TEMPORAL_EMA_PREVIOUS_WEIGHT) * probability
-                for sequence, probability in current.sequence_distribution.items()
-            }
-        total = sum(smoothed.values())
-        self._temporal_sequence_distribution = {
-            sequence: value / total for sequence, value in smoothed.items()
-        }
-        ranked = sorted(
-            self._temporal_sequence_distribution.items(),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-        best_sequence, best_probability = ranked[0]
-        second_probability = ranked[1][1] if len(ranked) > 1 else 0.0
-        slot_distributions = [
-            {name: 0.0 for name in self.catalog_names}
-            for _ in range(self.config.priority_slots)
-        ]
-        for sequence, probability in self._temporal_sequence_distribution.items():
-            for slot_index, agent in enumerate(sequence):
-                slot_distributions[slot_index][agent] += probability
-        return SequenceInference(
-            sequence_distribution=dict(self._temporal_sequence_distribution),
-            slot_distributions=slot_distributions,
-            best_sequence=best_sequence,
-            best_sequence_probability=best_probability,
-            best_sequence_margin=best_probability - second_probability,
-            # Position metadata comes from the current observation. Agent
-            # identity is the only state accumulated across observations.
-            best_layout=current.best_layout_by_sequence.get(
-                best_sequence, current.best_layout
-            ),
-            best_layout_by_sequence=current.best_layout_by_sequence,
+    def _smooth_slot_distributions(
+        self,
+        current: IndependentSlotInference,
+    ) -> IndependentSlotInference:
+        smoothed_slots: List[Dict[str, float]] = []
+        for slot_index, distribution in enumerate(current.slot_distributions):
+            previous = self._temporal_slot_distributions[slot_index]
+            if previous is None:
+                smoothed = dict(distribution)
+            else:
+                smoothed = {
+                    name: TEMPORAL_EMA_PREVIOUS_WEIGHT * previous.get(name, 0.0)
+                    + (1.0 - TEMPORAL_EMA_PREVIOUS_WEIGHT) * probability
+                    for name, probability in distribution.items()
+                }
+            total = sum(smoothed.values()) or 1.0
+            normalized = {name: value / total for name, value in smoothed.items()}
+            self._temporal_slot_distributions[slot_index] = normalized
+            smoothed_slots.append(normalized)
+
+        return IndependentSlotInference(
+            slot_distributions=smoothed_slots,
+            slot_positions=current.slot_positions,
             supporting_positions=current.supporting_positions,
         )
 
@@ -433,7 +338,8 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
             and runtime.best_name_score >= MIN_ABSOLUTE_NAME_MARGIN
         )
         reliable = force or (
-            runtime.candidate_consistent_steps >= 2
+            runtime.candidate_consistent_steps
+            >= self.config.confirm_stable_steps
             and absolute_evidence_ready
             and probability >= self.config.tentative_probability
             and margin >= self.config.tentative_margin
@@ -514,67 +420,22 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
                     ),
                 )
 
-    def _update_sequence_candidate(self, inference: SequenceInference) -> None:
-        candidate = inference.best_sequence
-        if self._sequence_candidate == candidate:
-            self._sequence_consistent_steps += 1
-        else:
-            self._sequence_candidate = candidate
-            self._sequence_consistent_steps = 1
-        self._sequence_probability = inference.best_sequence_probability
-        self._sequence_margin = inference.best_sequence_margin
-
-    def _commit_sequence(
+    def _commit_slots(
         self,
-        inference: SequenceInference,
+        inference: IndependentSlotInference,
         global_step: int,
         force: bool,
     ) -> None:
-        absolute_evidence_ready = all(
-            candidate.name_score >= MIN_ABSOLUTE_NAME_MARGIN
-            for candidate in inference.best_layout
-        )
-        reliable = force or (
-            self._sequence_consistent_steps >= 2
-            and absolute_evidence_ready
-            and inference.best_sequence_probability
-            >= self.config.tentative_probability
-            and inference.best_sequence_margin >= self.config.tentative_margin
-        )
-        if not reliable:
-            return
-
-        for slot_index, agent in enumerate(inference.best_sequence):
+        for slot_index, distribution in enumerate(inference.slot_distributions):
             runtime = self.slots[slot_index]
             if runtime.recognized_candidate is not None:
                 continue
             self._recognize(
                 slot_index,
-                inference.slot_distributions[slot_index],
-                global_step,
-                source="joint_sequence_map",
-                force=True,
-                candidate_override=agent,
-            )
-
-    def _force_catalog_fallback(self, global_step: int) -> None:
-        """Honor the fixed three-slot prefetch contract when no layout survives."""
-
-        fallback = self.catalog_names[0]
-        distribution = {
-            name: 1.0 if name == fallback else 0.0
-            for name in self.catalog_names
-        }
-        for slot_index in range(self.config.priority_slots):
-            if self.slots[slot_index].recognized_candidate is not None:
-                continue
-            self._recognize(
-                slot_index,
                 distribution,
                 global_step,
-                source="forced_catalog_fallback",
-                force=True,
-                candidate_override=fallback,
+                source="independent_slot_map",
+                force=force,
             )
 
     def observe(
@@ -610,13 +471,15 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
             if (candidate := self._score_position(logits, logits_start, anchor))
             is not None
         ]
-        current = self._joint_sequence_inference(position_candidates)
+        current = self._independent_slot_inference(position_candidates)
         if current is not None:
-            inference = self._temporal_sequence_inference(current)
-            self._last_sequence_inference = inference
-            self._update_sequence_candidate(inference)
-            for slot_index, best in enumerate(inference.best_layout):
+            inference = self._smooth_slot_distributions(current)
+            for slot_index, best in enumerate(inference.slot_positions):
                 runtime = self.slots[slot_index]
+                if runtime.anchor_start == best.anchor_start:
+                    runtime.anchor_consistent_steps += 1
+                else:
+                    runtime.anchor_consistent_steps = 1
                 runtime.anchor_start = best.anchor_start
                 runtime.anchor_token_ids = best.anchor_token_ids
                 runtime.name_start = best.anchor_start + len(best.anchor_token_ids)
@@ -626,30 +489,11 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
                     slot_index
                 ]
                 runtime.best_name_score = best.name_score
-            self._commit_sequence(
+            self._commit_slots(
                 inference,
                 global_step,
-                force=(
-                    self._full_sequence_observations
-                    >= FORCED_PREFETCH_OBSERVATIONS
-                ),
+                force=False,
             )
-
-        if (
-            self._full_sequence_observations >= FORCED_PREFETCH_OBSERVATIONS
-            and any(
-                runtime.recognized_candidate is None
-                for runtime in self.slots[:self.config.priority_slots]
-            )
-        ):
-            if self._last_sequence_inference is not None:
-                self._commit_sequence(
-                    self._last_sequence_inference,
-                    global_step,
-                    force=True,
-                )
-            else:
-                self._force_catalog_fallback(global_step)
 
     def decoder_mask(
         self, mask_index: torch.Tensor, mask_start: int = 0
@@ -729,11 +573,42 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
             for slot in priority
             if slot["final_agent_seconds"] is not None
         ]
+        switch_times = [
+            slot["switch_seconds"]
+            for slot in priority
+            if slot["switch_seconds"] is not None
+        ]
+        effective_ready_times = []
+        for slot in priority:
+            if slot["prediction_correct"] is True:
+                ready = slot["recognized_seconds"]
+            else:
+                ready = slot["switch_seconds"] or slot["final_agent_seconds"]
+            if ready is not None:
+                effective_ready_times.append(ready)
+        all_recognized_seconds = (
+            max(recognized)
+            if len(recognized) == self.config.priority_slots
+            else None
+        )
+        all_final_agents_seconds = (
+            max(final_agent_times)
+            if len(final_agent_times) == self.config.priority_slots
+            else None
+        )
+        effective_all_agents_ready_seconds = (
+            max(effective_ready_times)
+            if len(effective_ready_times) == self.config.priority_slots
+            else None
+        )
         return {
-            "method": "joint_sequence_map_v3",
+            "method": "independent_slot_map_v4",
             "priority_slots": self.config.priority_slots,
             "tracking_slots": self.tracking_slots,
             "catalog": list(self.config.catalog),
+            "probability_threshold": self.config.tentative_probability,
+            "margin_threshold": self.config.tentative_margin,
+            "name_stable_steps": self.config.confirm_stable_steps,
             "observed_steps": self._observed_steps,
             "full_sequence_observations": self._full_sequence_observations,
             "discovered_agent_fields": sum(
@@ -754,28 +629,37 @@ class MarginalizedAgentFieldController(JsonAgentFieldController):
                 if correctness
                 else None
             ),
-            "predicted_agent_sequence": (
-                list(self._sequence_candidate)
-                if self._sequence_candidate is not None
-                else None
-            ),
-            "sequence_probability": self._sequence_probability,
-            "sequence_margin": self._sequence_margin,
-            "sequence_consistent_steps": self._sequence_consistent_steps,
+            "predicted_agent_sequence": [
+                self.slots[index].recognized_candidate
+                for index in range(self.config.priority_slots)
+            ],
+            # Retained as null compatibility fields for existing log readers.
+            # This controller intentionally has no joint sequence probability.
+            "sequence_probability": None,
+            "sequence_margin": None,
+            "sequence_consistent_steps": None,
             "prefetch_switch_count": sum(
                 slot["switch_required"] for slot in priority
             ),
-            "all_final_agents_seconds": (
-                max(final_agent_times)
-                if len(final_agent_times) == self.config.priority_slots
+            "last_agent_correction_seconds": (
+                max(switch_times) if switch_times else None
+            ),
+            "all_final_agents_seconds": all_final_agents_seconds,
+            "effective_all_agents_ready_seconds": (
+                effective_all_agents_ready_seconds
+            ),
+            "effective_prefetch_lead_seconds": (
+                max(
+                    0.0,
+                    all_final_agents_seconds
+                    - effective_all_agents_ready_seconds,
+                )
+                if all_final_agents_seconds is not None
+                and effective_all_agents_ready_seconds is not None
                 else None
             ),
             "agent_slots": slots,
-            "all_recognized_seconds": (
-                max(recognized)
-                if len(recognized) == self.config.priority_slots
-                else None
-            ),
+            "all_recognized_seconds": all_recognized_seconds,
             "partial_recognized_seconds": max(recognized) if recognized else None,
         }
 

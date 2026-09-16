@@ -18,7 +18,7 @@ class CharacterTokenizer:
         return "".join(chr(int(token_id) - 1) for token_id in ids)
 
 
-def make_controller():
+def make_controller(stable_steps=2):
     tokenizer = CharacterTokenizer()
     controller = MarginalizedAgentFieldController(
         tokenizer=tokenizer,
@@ -26,6 +26,7 @@ def make_controller():
             catalog=["code_agent", "math_agent", "search_agent"],
             priority_slots=3,
             tracking_slots=3,
+            confirm_stable_steps=stable_steps,
         ),
         prompt_length=8,
         gen_length=220,
@@ -72,9 +73,11 @@ def test_moving_positions_accumulate_by_order_without_modifying_output():
     metrics = controller.metrics()
     assert [slot["agent"] for slot in metrics["agent_slots"]] == agents
     assert all(
-        slot["decision_source"] == "joint_sequence_map"
+        slot["decision_source"] == "independent_slot_map"
         for slot in metrics["agent_slots"]
     )
+    assert metrics["method"] == "independent_slot_map_v4"
+    assert metrics["sequence_probability"] is None
     assert metrics["all_priority_agents_recognized"] is True
     assert torch.equal(x, original)
 
@@ -104,9 +107,26 @@ def test_final_plan_checks_prefetch_accuracy_without_replacing_prediction():
     )
     assert metrics["all_final_agents_seconds"] is not None
     assert metrics["prefetch_switch_count"] == 1
+    assert metrics["last_agent_correction_seconds"] is not None
+    assert metrics["effective_all_agents_ready_seconds"] is not None
+    assert metrics["effective_prefetch_lead_seconds"] is not None
     assert metrics["agent_slots"][1]["switch_required"] is True
     assert metrics["agent_slots"][1]["switch_seconds"] is not None
     assert metrics["prediction_accuracy"] == 2 / 3
+
+
+def test_prefetch_requires_configured_consecutive_name_observations():
+    controller, x = make_controller(stable_steps=4)
+    starts = [24, 84, 144]
+    agents = ["search_agent", "code_agent", "math_agent"]
+    logits = logits_for(controller, x, starts, agents)
+
+    for step in (0, 32, 64):
+        controller.observe(logits, x, 0, step)
+        assert controller.metrics()["recognized_agent_fields"] == 0
+
+    controller.observe(logits, x, 0, 96)
+    assert controller.metrics()["recognized_agent_fields"] == 3
 
 
 def test_predicted_slot_missing_from_final_plan_counts_as_incorrect():
@@ -128,7 +148,7 @@ def test_predicted_slot_missing_from_final_plan_counts_as_incorrect():
     assert metrics["prediction_accuracy"] == 2 / 3
 
 
-def test_third_full_observation_forces_all_three_prefetch_decisions():
+def test_low_confidence_observations_do_not_force_prefetch_decisions():
     controller, x = make_controller()
     starts = [24, 84, 144]
     logits = torch.full((1, x.shape[1], 300), -20.0)
@@ -144,9 +164,5 @@ def test_third_full_observation_forces_all_three_prefetch_decisions():
 
     controller.observe(logits, x, 0, 64)
     metrics = controller.metrics()
-    assert metrics["recognized_agent_fields"] == 3
-    assert metrics["all_priority_agents_recognized"] is True
-    assert all(
-        slot["decision_source"] == "joint_sequence_map"
-        for slot in metrics["agent_slots"]
-    )
+    assert metrics["recognized_agent_fields"] == 0
+    assert metrics["all_priority_agents_recognized"] is False

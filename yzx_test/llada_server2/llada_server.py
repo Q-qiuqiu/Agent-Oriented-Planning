@@ -95,6 +95,7 @@ class ServerConfig:
     threshold: float
     priority_threshold: float
     priority_margin_threshold: float
+    agent_stable_steps: int
     agent_anchor_margin: float
     agent_discovery_steps: int
     agent_timing_log_path: str
@@ -282,6 +283,7 @@ class LLaDAPlannerRuntime:
                     anchor_min_logit_margin=self.config.agent_anchor_margin,
                     tentative_probability=self.config.priority_threshold,
                     tentative_margin=self.config.priority_margin_threshold,
+                    confirm_stable_steps=self.config.agent_stable_steps,
                     discovery_steps=self.config.agent_discovery_steps,
                 ),
                 prompt_length=input_ids.shape[1],
@@ -584,8 +586,27 @@ def parse_args():
         "--cache_mode", choices=("none", "prefix", "dual"), default="prefix"
     )
     parser.add_argument("--threshold", type=float, default=0.9)
-    parser.add_argument("--priority_threshold", type=float, default=0.45)
-    parser.add_argument("--priority_margin_threshold", type=float, default=0.20)
+    parser.add_argument(
+        "--priority_threshold",
+        type=float,
+        default=0.99,
+        help="Minimum per-slot Agent probability required for prefetch.",
+    )
+    parser.add_argument(
+        "--priority_margin_threshold",
+        type=float,
+        default=0.98,
+        help="Minimum top-1 minus top-2 probability margin per Agent slot.",
+    )
+    parser.add_argument(
+        "--agent_stable_steps",
+        type=int,
+        default=3,
+        help=(
+            "Consecutive observations for which a slot's predicted Agent name "
+            "must remain unchanged before prefetch."
+        ),
+    )
     parser.add_argument(
         "--agent_anchor_margin",
         type=float,
@@ -654,6 +675,12 @@ def main():
         raise ValueError("max_gen_length must be divisible by block_size.")
     if args.agent_discovery_steps <= 0:
         raise ValueError("agent_discovery_steps must be positive.")
+    if args.agent_stable_steps <= 0:
+        raise ValueError("agent_stable_steps must be positive.")
+    if not 0.0 <= args.priority_threshold <= 1.0:
+        raise ValueError("priority_threshold must be between 0 and 1.")
+    if not 0.0 <= args.priority_margin_threshold <= 1.0:
+        raise ValueError("priority_margin_threshold must be between 0 and 1.")
     if args.agent_timing_slots < args.agent_slots:
         raise ValueError("agent_timing_slots must be at least agent_slots.")
 
@@ -672,6 +699,7 @@ def main():
             threshold=args.threshold,
             priority_threshold=args.priority_threshold,
             priority_margin_threshold=args.priority_margin_threshold,
+            agent_stable_steps=args.agent_stable_steps,
             agent_anchor_margin=args.agent_anchor_margin,
             agent_discovery_steps=args.agent_discovery_steps,
             agent_timing_log_path=args.agent_timing_log_path,
