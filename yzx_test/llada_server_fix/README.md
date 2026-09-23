@@ -1,8 +1,8 @@
-# LLaDA Server 2
+# LLaDA Server
 
-This is an independent experimental copy of the Fast-dLLM v1 LLaDA runtime.
-It keeps the caller's reasoning-first planner prompt and predicts the first
-three plan Agent names earlier from intermediate diffusion states.
+This directory is the AOP-owned copy of the Fast-dLLM v1 LLaDA runtime. Make
+future server changes here so the benchmark clients and planner server remain
+in the same repository.
 
 ## Entrypoints
 
@@ -10,9 +10,8 @@ three plan Agent names earlier from intermediate diffusion states.
 - `base_llada_server.py`: separately instrumented baseline server. It passively
   monitors naturally materialized JSON `agent` fields for timing, but never
   changes logits, masks, tokens, decoding order, or the returned response.
-- `llada_server.py`: planner server. Under `reasonplan`, it marginalizes over
-  moving JSON-field positions, accumulates Agent evidence across denoising
-  observations, and emits ordered Agent-name prefetch decisions.
+- `llada_server.py`: planner server with Agent-name priority decoding, timing
+  records, prompt policy handling, and conservative plan JSON repair.
 
 The planner server extracts the active Agent registry from lines formatted as
 `- name_agent: description` in the request system prompt. Its 13-name global
@@ -23,10 +22,8 @@ still belong to the current request registry.
 
 - `generate.py`: masked-diffusion decoding and cache implementations.
 - `model/`: local LLaDA Transformers model definition.
-- `marginal_agent_priority.py`: read-only reasonplan predictor. It never writes
-  predicted names into the output canvas and has no device-count scheduler.
-- `agent_priority.py`, `json_agent_priority.py`: original plan-first priority
-  implementation retained for comparison.
+- `agent_priority.py`, `json_agent_priority.py`: early Agent recognition and
+  priority decoding.
 - `response_agent_timing.py`: read-only controller used by the baseline server
   to observe Agent-name materialization during diffusion.
 - `agent_timing.py`: per-request Agent timing persistence.
@@ -46,14 +43,14 @@ started with:
 bash yzx_test/start_vllm.sh llada4 0
 ```
 
-For a local timing comparison, run the copied passive baseline with the same
-model, decoding arguments, and client prompt:
+Run the monitored baseline directly with the same environment variables used
+by `fastdllm_server.py`:
 
 ```bash
 FASTDLLM_MODEL_PATH=/data/labshare/Param/llada \
 FASTDLLM_SERVED_MODEL_NAME=/data/labshare/Param/llada \
 FASTDLLM_PORT=7004 \
-python yzx_test/llada_server2/base_llada_server.py \
+python yzx_test/llada_server/base_llada_server.py \
   --gen-length 1024 \
   --block-size 32 \
   --cache-mode dual \
@@ -85,14 +82,14 @@ planning reasoning are ignored. Monitoring overhead is part of
 `monitor_overhead_included: true`. Disable it for an uninstrumented baseline:
 
 ```bash
-python yzx_test/llada_server2/base_llada_server.py --no-record-agent-timings
+python yzx_test/llada_server/base_llada_server.py --no-record-agent-timings
 ```
 
 Run the Agent-aware planner server directly when early Agent recognition is
 required:
 
 ```bash
-python yzx_test/llada_server2/llada_server.py \
+python llada_server/llada_server.py \
   --model_path /data/labshare/Param/llada \
   --served_model_name /data/labshare/Param/llada \
   --port 7004 \
@@ -102,25 +99,8 @@ python yzx_test/llada_server2/llada_server.py \
   --cache_mode dual \
   --agent_slots 3 \
   --agent_timing_slots 3 \
-  --policy reasonplan \
-  --agent_timing_log_path yzx_test/benchmarks/fastdllm_log/reasonplan_v2_timings.jsonl
+  --policy reasonplan
 ```
-
-An INFO log line named `agent_prefetch_decision` is emitted once for every
-recognized slot. The controller always commits the first three slots and still
-allows repeated Agent names. For every ordered field layout, it scores every
-complete Agent sequence, aggregates identical sequences across layouts with
-log-sum-exp, and selects the global MAP sequence. An arithmetic EMA combines
-sequence distributions across observations. If confidence gates have not
-fired, the third full-sequence observation forces a MAP decision so the final
-Agent is still prefetched early.
-
-The timing JSONL records `agent`, `final_agent`, `final_agent_seconds`,
-`prediction_correct`, and `decision_source`. A wrong prediction emits an
-immediate `agent_prefetch_switch` INFO event when the true JSON field becomes
-visible; an external model loader can use that event to cancel the old load and
-start the final Agent model. The Agent catalog is still taken from the current
-request prompt; no model-to-device or expected-benefit policy is applied.
 
 The code was copied from `/data/home/yzx/Fast-dLLM/v1/llada`. The upstream
 license is retained as `LICENSE.fast-dllm`.

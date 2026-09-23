@@ -18,7 +18,12 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "iirc_compact_full_reasoning_first_v4"
+# v3 = base_llada detection-slowdown variant: identical rules, markers and
+# JSON schema, but the PLANNING_REASONING instruction now demands one detailed
+# paragraph per selected agent plus a synthesis paragraph, so the PLAN_JSON
+# block (and therefore the "agent":" anchors the timing monitor detects)
+# starts much later in the response.
+FULL_PROMPT_VERSION = "iirc_full_reasoning_first_long_v3_3sent"
 
 
 def remove_json_example(prompt, introduction):
@@ -55,31 +60,44 @@ BASE_FULL_INSTRUCTIONS = remove_json_example(
 
 FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + """
 
+Use the same decomposition, agent selection, dependencies,
+and JSON plan that you would produce under the original instructions. The only
+additional requirement is to output the planning reasoning before that JSON.
+
 PLANNING_REASONING
-Explain why each independent task can run immediately, why each dependency is
-needed, and why any plan longer than five calls cannot be consolidated safely.
-Do not solve the question or introduce tasks not present in PLAN_JSON.
+Explain the reasoning that led to the plan in depth. For EACH agent task you
+selected, write one paragraph of about two sentences describing
+the perspective it contributes, the method and kind of evidence it relies on,
+and why that angle alone is insufficient without the other selected agents.
+Then finish with one synthesis paragraph explaining how the selected views
+complement each other and why this decomposition fits the question. This is
+an additional explanation, not a different planning task. Do not solve the
+subtasks in this section and do not introduce any agent-selection or
+decomposition rules beyond the original instructions. Do not put JSON or
+Markdown code fences in this section.
 END_PLANNING_REASONING
 
 PLAN_JSON
 [
-  {"agent": "context_agent", "id": 1, "task": "...", "reason": "...", "dep": []},
-  {"agent": "retrieval_agent", "id": 2, "task": "...", "reason": "...", "dep": []},
-  {"agent": "reasoning_agent", "id": 3, "task": "...", "reason": "...", "dep": [1, 2]}
+  {
+    "agent": "context_agent",
+    "id": 1,
+    "task": "subtask description",
+    "reason": "why this agent is suitable",
+    "dep": []
+  }
 ]
 END_PLAN_JSON
-
-Use each marker exactly once. Do not use Markdown fences.
 """
 
 CONFIG = {
     "input": "benchmarks/iirc/iirc_dev_flat.json",
-    "plans_output": "benchmarks/iirc/iirc_plans_base_lladav2.json",
-    "benchmark_output": "benchmarks/iirc/iirc_subtask_base_lladav2.json",
-    "planner_api_url": "http://10.137.144.97:7006/v1",
+    "plans_output": "benchmarks/iirc/iirc_plans_base_llama3.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_base_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7005/v1",
     "planner_api_key": "empty",
-    "planner_model": "/data/labshare/Param/llada",
-    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llada",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,
@@ -113,33 +131,49 @@ def request_completion(query, config):
 
 
 def extract_json_array(text):
-    segment = text
-    marker = re.search(r"(?m)^\s*PLAN_JSON\s*:?[ \t]*$", text)
-    if marker:
-        segment = text[marker.end():]
-        end = re.search(r"(?m)^\s*END_PLAN_JSON\s*$", segment)
-        if end:
-            segment = segment[: end.start()]
     decoder = json.JSONDecoder()
-    for match in re.finditer(r"\[", segment):
+    value = text.strip()
+    marker_matches = list(re.finditer(r"(?m)^\s*PLAN_JSON\s*:?\s*$", value))
+    if marker_matches:
+        segment = value[marker_matches[-1].end():]
+        end_match = re.search(r"(?m)^\s*END_PLAN_JSON\s*$", segment)
+        if end_match:
+            segment = segment[:end_match.start()]
+        segment = re.sub(r"(?m)^\s*```(?:json)?\s*$", "", segment).strip()
+        start = segment.find("[")
+        if start < 0:
+            raise ValueError("PLAN_JSON contains no JSON array")
         try:
-            value, _ = decoder.raw_decode(segment[match.start():])
+            plan, _ = decoder.raw_decode(segment[start:])
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Cannot parse PLAN_JSON array: {exc}") from exc
+        if not isinstance(plan, list) or not all(isinstance(step, dict) for step in plan):
+            raise ValueError("PLAN_JSON must be an array of plan-step objects")
+        return plan
+
+    for match in re.finditer(r"\[", value):
+        try:
+            plan, _ = decoder.raw_decode(value[match.start():])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, list):
-            return value
-    raise ValueError("No JSON plan array found")
+        if isinstance(plan, list) and all(isinstance(step, dict) for step in plan):
+            return plan
+    raise ValueError("Cannot find plan JSON in planner output")
 
 
-def extract_reasoning(text):
-    start = re.search(r"(?m)^\s*PLANNING_REASONING\s*:?[ \t]*$", text)
-    if not start:
+def extract_planning_reasoning(text):
+    start_marker = "PLANNING_REASONING"
+    end_marker = "END_PLANNING_REASONING"
+    start = text.find(start_marker)
+    if start < 0:
         return None
-    tail = text[start.end():]
-    end = re.search(r"(?m)^\s*END_PLANNING_REASONING\s*$", tail)
-    if not end:
+    start += len(start_marker)
+    end = text.find(end_marker, start)
+    if end < 0:
+        end = text.find("PLAN_JSON", start)
+    if end < 0:
         return None
-    return tail[: end.start()].strip() or None
+    return text[start:end].strip(" \n:\t") or None
 
 
 def save_json(path, value):
@@ -175,7 +209,8 @@ def build_plans(queries, config):
     if existing:
         print(
             f"resume | loaded={len(existing)} | completed={len(done)} "
-            f"| prompt_version={FULL_PROMPT_VERSION}",
+            f"| prompt_version={FULL_PROMPT_VERSION} "
+            f"| retry_missing_reasoning={config['retry_missing_reasoning']}",
             flush=True,
         )
 
@@ -188,13 +223,13 @@ def build_plans(queries, config):
         record = {
             **row,
             "planner_model": config["planner_model"],
-            "planner_mode": "plan_json_then_reasoning",
+            "planner_mode": "reasoning_long_then_json",
             "planner_prompt_version": FULL_PROMPT_VERSION,
         }
         record.pop("planner_input", None)
         try:
             raw_output = request_completion(row["planner_input"], config)
-            reasoning = extract_reasoning(raw_output)
+            reasoning = extract_planning_reasoning(raw_output)
             plan = normalize_plan(extract_json_array(raw_output))
             record.update(
                 {
@@ -210,7 +245,7 @@ def build_plans(queries, config):
         except Exception as exc:
             record.update(
                 {
-                    "planning_reasoning": extract_reasoning(raw_output) if raw_output else None,
+                    "planning_reasoning": extract_planning_reasoning(raw_output) if raw_output else None,
                     "raw_plan": raw_output,
                     "plan": None,
                     "plan_call_count": None,
@@ -231,7 +266,9 @@ def build_plans(queries, config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build IIRC full plans.")
+    parser = argparse.ArgumentParser(
+        description="Build IIRC plans with long visible reasoning and JSON subtasks."
+    )
     parser.add_argument("--input", default=CONFIG["input"])
     parser.add_argument("--plans-output", default=CONFIG["plans_output"])
     parser.add_argument("--benchmark-output", default=CONFIG["benchmark_output"])
@@ -243,6 +280,11 @@ def main():
     parser.add_argument("--timeout", type=int, default=CONFIG["timeout"])
     parser.add_argument("--limit", type=int, default=CONFIG["limit"])
     parser.add_argument("--agents", nargs="+", choices=AGENTS, default=CONFIG["agents"])
+    parser.add_argument(
+        "--retry-missing-reasoning",
+        action="store_true",
+        default=CONFIG["retry_missing_reasoning"],
+    )
     args = parser.parse_args()
 
     config = dict(CONFIG)

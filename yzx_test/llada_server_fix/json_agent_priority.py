@@ -61,6 +61,12 @@ class JsonAgentPriorityConfig:
     confirm_stable_steps: int = 2
     discovery_steps: int = 4
     min_anchor_gap: int = 12
+    # Periodic cross-block probing experiment.  None keeps the legacy priority
+    # behavior with speculative Agent-name writes.  Any explicit value
+    # (including 0 = block-start observations only) switches the controller to
+    # prediction-only mode: speculative writes are disabled so extra
+    # observations can never change the generation trajectory.
+    probe_period: Optional[int] = None
 
     def __post_init__(self) -> None:
         names = list(self.catalog)
@@ -74,6 +80,8 @@ class JsonAgentPriorityConfig:
             raise ValueError("Stability step counts must be positive.")
         if self.discovery_steps < 1:
             raise ValueError("discovery_steps must be positive.")
+        if self.probe_period is not None and self.probe_period < 0:
+            raise ValueError("probe_period must be None or a non-negative integer.")
 
 
 @dataclass
@@ -100,6 +108,14 @@ class JsonAgentSlotRuntime:
     first_observed_step: Optional[int] = None
     recognized_step: Optional[int] = None
     confirmed_step: Optional[int] = None
+    # Probing-experiment bookkeeping.  predicted_* is the first logits-based
+    # recognition (speculative, before the value exists in x); materialized_*
+    # is the first time the Agent value appears naturally in the response.
+    predicted_seconds: Optional[float] = None
+    predicted_step: Optional[int] = None
+    materialized_seconds: Optional[float] = None
+    materialized_step: Optional[int] = None
+    materialized_candidate: Optional[str] = None
     last_distribution: Optional[Dict[str, float]] = field(default=None)
 
 
@@ -133,6 +149,20 @@ class JsonAgentFieldController:
         self._started_at: Optional[float] = None
         self._observed_steps = 0
         self._full_sequence_observations = 0
+
+        # Periodic cross-block probing experiment state.
+        self.probe_period = config.probe_period
+        self.prediction_only = config.probe_period is not None
+        self.probe_forwards = 0
+        self.plan_complete_seconds: Optional[float] = None
+        self.plan_complete_step: Optional[int] = None
+        plan_end_variants = tuple(
+            dict.fromkeys(("\nEND_PLAN_JSON", "END_PLAN_JSON"))
+        )
+        self.plan_end_patterns = tuple(
+            tuple(self._encode(text)) for text in plan_end_variants
+        )
+        self._plan_end_tensors: Tuple[torch.Tensor, ...] = ()
 
         # Do not include the opening brace, indentation, or opening key quote.
         # The LLaDA tokenizer merges leading whitespace with ``{``/``\"`` into
@@ -192,6 +222,13 @@ class JsonAgentFieldController:
         self._started_at = time.perf_counter()
         self._observed_steps = 0
         self._full_sequence_observations = 0
+        self.probe_forwards = 0
+        self.plan_complete_seconds = None
+        self.plan_complete_step = None
+        self._plan_end_tensors = tuple(
+            torch.tensor(pattern, device=x.device, dtype=x.dtype)
+            for pattern in self.plan_end_patterns
+        )
         self._catalog_target_ids = torch.tensor(
             [self.padded_catalog_ids[name] for name in self.catalog_names],
             device=x.device,
@@ -398,6 +435,11 @@ class JsonAgentFieldController:
             runtime.first_observed_step = None
             runtime.recognized_step = None
             runtime.confirmed_step = None
+            runtime.predicted_seconds = None
+            runtime.predicted_step = None
+            runtime.materialized_seconds = None
+            runtime.materialized_step = None
+            runtime.materialized_candidate = None
             runtime.field_written = False
             runtime.fuzzy_matched_from = None
 
@@ -529,6 +571,7 @@ class JsonAgentFieldController:
         distribution: Dict[str, float],
         global_step: int,
         allow_write: bool = True,
+        from_natural: bool = False,
     ) -> None:
         runtime = self.slots[slot_index]
         ranked = sorted(distribution.items(), key=lambda item: item[1], reverse=True)
@@ -565,6 +608,13 @@ class JsonAgentFieldController:
                 runtime.recognized_margin = margin
                 runtime.recognized_seconds = now
                 runtime.recognized_step = global_step
+            # A logits-based recognition that precedes natural materialization
+            # is the prediction the probing experiment measures.  One-hot
+            # distributions produced from an already-materialized value are
+            # natural observations, not predictions.
+            if not from_natural and runtime.predicted_seconds is None:
+                runtime.predicted_seconds = now
+                runtime.predicted_step = global_step
             # A speculative recognition can be surfaced for prefetch, but it
             # must not mutate the response until the JSON anchor was naturally
             # decoded by the model.
@@ -617,18 +667,33 @@ class JsonAgentFieldController:
             runtime.confirmed for runtime in priority
         )
 
-    def observe(
+    def _scan_plan_complete(self, x: torch.Tensor, global_step: int) -> None:
+        """Record when the END_PLAN_JSON marker first appears naturally."""
+
+        if self.plan_complete_seconds is not None:
+            return
+        generation_start = self.prompt_length
+        generation_end = min(x.shape[1], self.prompt_length + self.gen_length)
+        sequence = x[0, generation_start:generation_end]
+        for target in self._plan_end_tensors:
+            width = target.shape[0]
+            if sequence.shape[0] < width:
+                continue
+            windows = sequence.unfold(0, width, 1)
+            if bool((windows == target).all(dim=1).any()):
+                self.plan_complete_seconds = self._elapsed()
+                self.plan_complete_step = global_step
+                return
+
+    def _observe_passive(
         self,
         logits: torch.Tensor,
         x: torch.Tensor,
         logits_start: int,
         global_step: int,
-        is_last_agent_step: bool = False,
     ) -> None:
-        del is_last_agent_step
-        self._observed_steps += 1
-        if self._priority_slots_confirmed():
-            return
+        """Shared read-only observation body used by observe() and probes."""
+
         covers_full_sequence = (
             logits_start <= self.prompt_length
             and logits_start + logits.shape[1]
@@ -638,10 +703,15 @@ class JsonAgentFieldController:
             self._full_sequence_observations += 1
             candidates = self._anchor_candidates(logits, x, logits_start)
             self._assign_anchors(x, candidates)
+            self._scan_plan_complete(x, global_step)
         for slot_index, runtime in enumerate(self.slots):
             if runtime.confirmed:
                 continue
             observed_name = self._observed_catalog_value(x, runtime)
+            if observed_name is not None and runtime.materialized_seconds is None:
+                runtime.materialized_seconds = self._elapsed()
+                runtime.materialized_step = global_step
+                runtime.materialized_candidate = observed_name
             if observed_name is not None:
                 distribution = {
                     name: 1.0 if name == observed_name else 0.0
@@ -656,10 +726,55 @@ class JsonAgentFieldController:
                     distribution,
                     global_step,
                     allow_write=(
-                        slot_index < self.config.priority_slots
+                        not self.prediction_only
+                        and slot_index < self.config.priority_slots
                         and observed_name is None
                     ),
+                    from_natural=observed_name is not None,
                 )
+
+    def probing_active(self) -> bool:
+        """Whether periodic probes should continue.
+
+        Probes stop once every priority Agent is stably recognized, so late
+        blocks with no open question do not pay the extra full-sequence
+        forward cost.
+        """
+        return self.prediction_only and not self._priority_slots_confirmed()
+
+    def observe(
+        self,
+        logits: torch.Tensor,
+        x: torch.Tensor,
+        logits_start: int,
+        global_step: int,
+        is_last_agent_step: bool = False,
+    ) -> None:
+        del is_last_agent_step
+        self._observed_steps += 1
+        if not self.prediction_only and self._priority_slots_confirmed():
+            return
+        self._observe_passive(logits, x, logits_start, global_step)
+
+    def observe_probe(
+        self,
+        logits: torch.Tensor,
+        x: torch.Tensor,
+        logits_start: int,
+        global_step: int,
+    ) -> None:
+        """Consume one read-only full-sequence probe.
+
+        The caller performs the extra forward; this method only advances the
+        prediction state machine.  It never writes tokens, so the generation
+        trajectory is independent of the probing frequency.  Available only in
+        the experimental prediction-only mode.
+        """
+        if not self.prediction_only:
+            return
+        self.probe_forwards += 1
+        self._observed_steps += 1
+        self._observe_passive(logits, x, logits_start, global_step)
 
     def decoder_mask(
         self, mask_index: torch.Tensor, mask_start: int = 0
@@ -729,12 +844,17 @@ class JsonAgentFieldController:
         # definitive evidence, so this records an end-of-generation upper bound
         # without writing or otherwise changing the response canvas.
         self._assign_anchors(x, self._materialized_anchor_candidates(x))
+        self._scan_plan_complete(x, self._observed_steps)
         now = self._elapsed()
         final_step = self._observed_steps
         for runtime in self.slots:
             observed_name = self._observed_catalog_value(x, runtime)
             if observed_name is None:
                 continue
+            if runtime.materialized_seconds is None:
+                runtime.materialized_seconds = now
+                runtime.materialized_step = final_step
+                runtime.materialized_candidate = observed_name
             if runtime.first_observed_seconds is None:
                 runtime.first_observed_seconds = now
                 runtime.first_observed_step = final_step
@@ -777,6 +897,11 @@ class JsonAgentFieldController:
                     "first_observed_step": runtime.first_observed_step,
                     "recognized_step": runtime.recognized_step,
                     "confirmed_step": runtime.confirmed_step,
+                    "predicted_seconds": runtime.predicted_seconds,
+                    "predicted_step": runtime.predicted_step,
+                    "materialized_seconds": runtime.materialized_seconds,
+                    "materialized_step": runtime.materialized_step,
+                    "materialized_candidate": runtime.materialized_candidate,
                     "probability": runtime.recognized_probability,
                     "margin": runtime.recognized_margin,
                     "confirmed": runtime.confirmed,
@@ -806,6 +931,11 @@ class JsonAgentFieldController:
             "catalog": list(self.config.catalog),
             "observed_steps": self._observed_steps,
             "full_sequence_observations": self._full_sequence_observations,
+            "probe_period": self.probe_period,
+            "prediction_only": self.prediction_only,
+            "probe_forwards": self.probe_forwards,
+            "plan_complete_seconds": self.plan_complete_seconds,
+            "plan_complete_step": self.plan_complete_step,
             "discovered_agent_fields": discovered_count,
             "recognized_agent_fields": recognized_count,
             "all_priority_agents_recognized": (

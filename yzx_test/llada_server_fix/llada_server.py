@@ -1,7 +1,8 @@
-"""OpenAI-compatible LLaDA server with read-only early Agent prediction."""
+"""OpenAI-compatible API server for MASK_SLOT-accelerated LLaDA planning."""
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -21,13 +22,17 @@ from transformers import AutoTokenizer
 
 from agent_priority import configure_agent_file_logging
 from agent_timing import AgentTimingRecorder
-from generate import generate, generate_with_dual_cache, generate_with_prefix_cache
+from generate import (
+    generate,
+    generate_with_dual_cache,
+    generate_with_fixed_canvas_dual_cache,
+    generate_with_prefix_cache,
+)
+from dynamic_fixed_canvas import DynamicFixedCanvasMonitor as FixedCanvasMonitor
+from fixed_canvas import NaturalReasoningPlanMonitor
 from json_agent_priority import (
-    JsonAgentFieldController,
-    JsonAgentPriorityConfig,
     extract_agent_registry,
 )
-from marginal_agent_priority import MarginalizedAgentFieldController
 from model.modeling_llada import LLaDAModelLM
 from planner_json_repair import repair_plan_json_response
 from planner_policy import apply_planner_prompt_policy
@@ -95,13 +100,18 @@ class ServerConfig:
     threshold: float
     priority_threshold: float
     priority_margin_threshold: float
-    agent_stable_steps: int
     agent_anchor_margin: float
     agent_discovery_steps: int
     agent_timing_log_path: str
+    agent_probe_period: Optional[int]
     plan_json_repair: bool
     policy: str
     api_key: Optional[str]
+    structure_mode: str
+    reasoning_budget: Optional[int]
+    plan_budget: Optional[int]
+    reasoning_ratio: float
+    plan_ratio: float
 
 
 class LLaDAPlannerRuntime:
@@ -268,24 +278,31 @@ class LLaDAPlannerRuntime:
         ).input_ids.to(self.device)
         mask_id = self.tokenizer.mask_token_id or 126336
         controller = None
-        if self.config.policy in {"planreason", "reasonplan"}:
-            controller_class = (
-                MarginalizedAgentFieldController
-                if self.config.policy == "reasonplan"
-                else JsonAgentFieldController
-            )
-            controller = controller_class(
+        if self.config.structure_mode != "dual_vanilla":
+            if self.config.cache_mode != "dual":
+                raise ValueError("Fixed canvas modes require --cache_mode dual.")
+            controller = FixedCanvasMonitor(
                 tokenizer=self.tokenizer,
-                config=JsonAgentPriorityConfig(
-                    catalog=request_agent_names,
-                    priority_slots=self.config.agent_slots,
-                    tracking_slots=self.config.agent_timing_slots,
-                    anchor_min_logit_margin=self.config.agent_anchor_margin,
-                    tentative_probability=self.config.priority_threshold,
-                    tentative_margin=self.config.priority_margin_threshold,
-                    confirm_stable_steps=self.config.agent_stable_steps,
-                    discovery_steps=self.config.agent_discovery_steps,
-                ),
+                catalog=request_agent_names,
+                priority_slots=3,
+                tracking_slots=max(16, self.config.agent_timing_slots),
+                prompt_length=input_ids.shape[1],
+                gen_length=gen_length,
+                mask_id=mask_id,
+                reasoning_budget=self.config.reasoning_budget,
+                plan_budget=self.config.plan_budget,
+                reasoning_ratio=self.config.reasoning_ratio,
+                plan_ratio=self.config.plan_ratio,
+                structure_mode=self.config.structure_mode,
+            )
+        elif self.config.policy in {"planreason", "reasonplan"}:
+            # Passive materialization timing only.  It never writes a catalog
+            # token or changes decoder masks, so this is true Dual Vanilla.
+            controller = NaturalReasoningPlanMonitor(
+                tokenizer=self.tokenizer,
+                catalog=request_agent_names,
+                priority_slots=self.config.agent_slots,
+                tracking_slots=max(16, self.config.agent_timing_slots),
                 prompt_length=input_ids.shape[1],
                 gen_length=gen_length,
                 mask_id=mask_id,
@@ -303,11 +320,26 @@ class LLaDAPlannerRuntime:
             "mask_id": mask_id,
             "agent_controller": controller,
         }
-        generate_fn = {
-            "none": generate,
-            "prefix": generate_with_prefix_cache,
-            "dual": generate_with_dual_cache,
-        }[self.config.cache_mode]
+        if (
+            self.config.structure_mode == "dual_vanilla"
+            and self.config.agent_probe_period is not None
+        ):
+            generation_kwargs["probe_period"] = self.config.agent_probe_period
+        if (
+            self.config.structure_mode == "dual_vanilla"
+            and controller is not None
+            and hasattr(controller, "step_callback")
+        ):
+            generation_kwargs["step_callback"] = controller.step_callback
+        if self.config.structure_mode == "dual_vanilla":
+            generate_fn = {
+                "none": generate,
+                "prefix": generate_with_prefix_cache,
+                "dual": generate_with_dual_cache,
+            }[self.config.cache_mode]
+        else:
+            generate_fn = generate_with_fixed_canvas_dual_cache
+            generation_kwargs["structure_mode"] = self.config.structure_mode
 
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
@@ -318,6 +350,10 @@ class LLaDAPlannerRuntime:
             torch.cuda.synchronize(self.device)
         generation_seconds = time.perf_counter() - generation_started_at
         suffix_ids = output_ids[:, input_ids.shape[1]:]
+        raw_output_token_ids = suffix_ids[0, :visible_tokens].detach().cpu().tolist()
+        raw_output_sha256 = hashlib.sha256(
+            suffix_ids[0, :visible_tokens].detach().cpu().numpy().tobytes()
+        ).hexdigest()
         content = self.tokenizer.decode(
             suffix_ids[0, :visible_tokens], skip_special_tokens=True
         )
@@ -365,10 +401,19 @@ class LLaDAPlannerRuntime:
                 if generation_seconds > 0 else 0.0
             ),
             "plan_json_repair": repair_report,
+            "structure_mode": self.config.structure_mode,
+            "raw_output_sha256": raw_output_sha256,
+            "raw_output_token_ids": raw_output_token_ids,
+            "unresolved_mask_count": int((suffix_ids == mask_id).sum().item()),
         }
         if controller is not None:
             metrics["agent_priority"] = controller.metrics()
-            metrics["agent_priority"]["policy"] = self.config.policy
+            metrics["agent_priority"]["policy"] = self.config.structure_mode
+            if self.config.structure_mode != "dual_vanilla":
+                metrics["fixed_canvas"] = metrics["agent_priority"]
+            probe_forwards = int(getattr(controller, "probe_forwards", 0) or 0)
+            metrics["probe_forwards"] = probe_forwards
+            metrics["total_forwards"] = int(nfe) + probe_forwards
         return content, usage, metrics
 
 
@@ -383,7 +428,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Fast-dLLM LLaDA Agent Prefetch API v2", lifespan=lifespan)
+app = FastAPI(title="Fast-dLLM LLaDA OpenAI API", lifespan=lifespan)
 
 
 def check_authorization(request: Request):
@@ -563,6 +608,50 @@ def parse_args():
     parser.add_argument("--block_size", type=int, default=32)
     parser.add_argument("--max_gen_length", type=int, default=1024)
     parser.add_argument("--steps_per_block", type=int, default=32)
+    parser.add_argument(
+        "--structure_mode",
+        choices=(
+            "dual_vanilla",
+            "fixed_canvas_vanilla",
+            "fixed_canvas_plan_first",
+        ),
+        default="dual_vanilla",
+        help=(
+            "dual_vanilla preserves the copied server path exactly; fixed modes "
+            "pre-place only PLANNING_REASONING and PLAN_JSON; both END markers "
+            "are generated naturally and terminate their capacity dynamically."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning_budget", "--reasoning-budget",
+        type=int,
+        default=None,
+        help=(
+            "Optional explicit reasoning capacity. If plan_budget is omitted, "
+            "PLAN receives the remaining non-delimiter canvas."
+        ),
+    )
+    parser.add_argument(
+        "--plan_budget", "--plan-budget",
+        type=int,
+        default=None,
+        help=(
+            "Optional maximum PLAN capacity, not a target output length. If "
+            "reasoning_budget is omitted, reasoning receives the remainder."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning_ratio", "--reasoning-ratio",
+        type=float,
+        default=0.5,
+        help="Default share of non-delimiter canvas assigned to reasoning.",
+    )
+    parser.add_argument(
+        "--plan_ratio", "--plan-ratio",
+        type=float,
+        default=0.5,
+        help="Default share of non-delimiter canvas assigned to PLAN capacity.",
+    )
     parser.add_argument("--agent_slots", type=int, default=3)
     parser.add_argument(
         "--agent_timing_slots",
@@ -586,27 +675,8 @@ def parse_args():
         "--cache_mode", choices=("none", "prefix", "dual"), default="prefix"
     )
     parser.add_argument("--threshold", type=float, default=0.9)
-    parser.add_argument(
-        "--priority_threshold",
-        type=float,
-        default=0.99,
-        help="Minimum per-slot Agent probability required for prefetch.",
-    )
-    parser.add_argument(
-        "--priority_margin_threshold",
-        type=float,
-        default=0.98,
-        help="Minimum top-1 minus top-2 probability margin per Agent slot.",
-    )
-    parser.add_argument(
-        "--agent_stable_steps",
-        type=int,
-        default=3,
-        help=(
-            "Consecutive observations for which a slot's predicted Agent name "
-            "must remain unchanged before prefetch."
-        ),
-    )
+    parser.add_argument("--priority_threshold", type=float, default=0.45)
+    parser.add_argument("--priority_margin_threshold", type=float, default=0.20)
     parser.add_argument(
         "--agent_anchor_margin",
         type=float,
@@ -625,13 +695,13 @@ def parse_args():
     parser.add_argument(
         "--policy",
         choices=("raw", "mid", "planreason", "reasonplan"),
-        default="reasonplan",
+        default="planreason",
         help=(
             "raw=unchanged prompt; mid=plan-first planner prompt without Agent "
             "priority; planreason=plan-first Agent-priority decoding (formerly "
             "now); reasonplan=preserve the caller's reasoning-first prompt and "
-            "use position-marginalized temporal evidence to recognize later "
-            "PLAN Agent fields without modifying normal decoding."
+            "use full-sequence logits to recognize later PLAN Agent fields as "
+            "early as confidence permits."
         ),
     )
     parser.add_argument("--api_key", default=None)
@@ -649,6 +719,20 @@ def parse_args():
         default="agent_timings.jsonl",
         help=(
             "Canonical JSONL file with the latest Agent timing record per request."
+        ),
+    )
+    parser.add_argument(
+        "--agent_probe_period",
+        type=int,
+        default=None,
+        help=(
+            "Experimental periodic cross-block Agent probing: every N local "
+            "denoising steps inside a block, run one extra read-only "
+            "full-sequence forward and feed only the Agent prediction "
+            "observer. Providing any value (including 0 = block-start "
+            "observations only) also disables speculative Agent-name writes, "
+            "so the generation trajectory stays identical to vanilla Dual "
+            "Cache decoding for P0/P4/P8 alike."
         ),
     )
     parser.add_argument(
@@ -675,14 +759,23 @@ def main():
         raise ValueError("max_gen_length must be divisible by block_size.")
     if args.agent_discovery_steps <= 0:
         raise ValueError("agent_discovery_steps must be positive.")
-    if args.agent_stable_steps <= 0:
-        raise ValueError("agent_stable_steps must be positive.")
-    if not 0.0 <= args.priority_threshold <= 1.0:
-        raise ValueError("priority_threshold must be between 0 and 1.")
-    if not 0.0 <= args.priority_margin_threshold <= 1.0:
-        raise ValueError("priority_margin_threshold must be between 0 and 1.")
     if args.agent_timing_slots < args.agent_slots:
         raise ValueError("agent_timing_slots must be at least agent_slots.")
+    if args.reasoning_budget is not None and args.reasoning_budget <= 0:
+        raise ValueError("reasoning_budget must be positive when provided.")
+    if args.plan_budget is not None and args.plan_budget <= 0:
+        raise ValueError("plan_budget must be positive when provided.")
+    if args.reasoning_ratio <= 0 or args.plan_ratio <= 0:
+        raise ValueError("reasoning_ratio and plan_ratio must be positive.")
+    if args.structure_mode != "dual_vanilla" and args.cache_mode != "dual":
+        raise ValueError("Fixed canvas modes require --cache_mode dual.")
+    if args.agent_probe_period is not None:
+        if args.agent_probe_period < 0:
+            raise ValueError("agent_probe_period must be a non-negative integer.")
+        if args.cache_mode != "dual":
+            raise ValueError(
+                "Periodic Agent probing requires --cache_mode dual."
+            )
 
     runtime = LLaDAPlannerRuntime(
         ServerConfig(
@@ -699,13 +792,18 @@ def main():
             threshold=args.threshold,
             priority_threshold=args.priority_threshold,
             priority_margin_threshold=args.priority_margin_threshold,
-            agent_stable_steps=args.agent_stable_steps,
             agent_anchor_margin=args.agent_anchor_margin,
             agent_discovery_steps=args.agent_discovery_steps,
             agent_timing_log_path=args.agent_timing_log_path,
+            agent_probe_period=args.agent_probe_period,
             plan_json_repair=args.plan_json_repair,
             policy=args.policy,
             api_key=args.api_key,
+            structure_mode=args.structure_mode,
+            reasoning_budget=args.reasoning_budget,
+            plan_budget=args.plan_budget,
+            reasoning_ratio=args.reasoning_ratio,
+            plan_ratio=args.plan_ratio,
         )
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)

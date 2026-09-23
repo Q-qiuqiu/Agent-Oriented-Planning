@@ -15,7 +15,7 @@ SUMMARY_TIMEOUT="180"
 
 # Runs sequentially by default; pass --batch to run this list concurrently.
 ASSIGNMENTS=(
-  #"q_q_q"
+  "q_q_q"
   "g_g_g"
   "l_l_l"
   "m_m_m"

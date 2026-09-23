@@ -29,7 +29,6 @@ def test_records_requests_in_canonical_log_without_writing_summary(tmp_path):
             "operations": ["close_object_and_add_comma:1"],
         },
         "agent_priority": {
-            "method": "joint_sequence_map_v3",
             "catalog": ["search_agent", "math_agent"],
             "priority_slots": 4,
             "tracking_slots": 32,
@@ -46,12 +45,6 @@ def test_records_requests_in_canonical_log_without_writing_summary(tmp_path):
                     "margin": 0.8,
                     "confirmed": True,
                     "fuzzy_matched_from": None,
-                    "final_agent": "search_agent",
-                    "final_agent_seconds": 4.0,
-                    "final_agent_step": 40,
-                    "prediction_correct": True,
-                    "decision_source": "joint_sequence_map",
-                    "switch_required": False,
                 },
                 {
                     "slot": 1,
@@ -65,23 +58,9 @@ def test_records_requests_in_canonical_log_without_writing_summary(tmp_path):
                     "margin": 0.6,
                     "confirmed": False,
                     "fuzzy_matched_from": None,
-                    "final_agent": "search_agent",
-                    "final_agent_seconds": 5.0,
-                    "final_agent_step": 50,
-                    "prediction_correct": False,
-                    "decision_source": "joint_sequence_map",
-                    "switch_required": True,
-                    "switch_seconds": 5.0,
-                    "switch_step": 50,
                 },
                 {"slot": 2, "agent": None},
             ],
-            "prefetch_switch_count": 1,
-            "all_final_agents_seconds": 5.0,
-            "predicted_agent_sequence": ["search_agent", "math_agent"],
-            "sequence_probability": 0.8,
-            "sequence_margin": 0.5,
-            "sequence_consistent_steps": 2,
         },
     }
     first = _record(recorder, "chatcmpl-ok", 100, "question one", metrics=metrics)
@@ -105,15 +84,6 @@ def test_records_requests_in_canonical_log_without_writing_summary(tmp_path):
     assert all(item["priority"] for item in records[0]["agents"])
     assert records[0]["all_agents_decided_seconds"] == 3.0
     assert records[0]["all_agents_confirmed_seconds"] == 1.5
-    assert records[0]["agent_prediction_method"] == "joint_sequence_map_v3"
-    assert records[0]["predicted_agent_sequence"] == [
-        "search_agent",
-        "math_agent",
-    ]
-    assert records[0]["prefetch_switch_count"] == 1
-    assert records[0]["all_final_agents_seconds"] == 5.0
-    assert records[0]["agents"][1]["switch_required"] is True
-    assert records[0]["agents"][1]["final_agent_seconds"] == 5.0
     assert records[1]["request_index"] == 2
     assert records[1]["status"] == "error"
 

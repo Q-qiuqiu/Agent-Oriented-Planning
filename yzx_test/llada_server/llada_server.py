@@ -97,6 +97,7 @@ class ServerConfig:
     agent_anchor_margin: float
     agent_discovery_steps: int
     agent_timing_log_path: str
+    agent_probe_period: Optional[int]
     plan_json_repair: bool
     policy: str
     api_key: Optional[str]
@@ -277,6 +278,7 @@ class LLaDAPlannerRuntime:
                     tentative_probability=self.config.priority_threshold,
                     tentative_margin=self.config.priority_margin_threshold,
                     discovery_steps=self.config.agent_discovery_steps,
+                    probe_period=self.config.agent_probe_period,
                 ),
                 prompt_length=input_ids.shape[1],
                 gen_length=gen_length,
@@ -295,6 +297,8 @@ class LLaDAPlannerRuntime:
             "mask_id": mask_id,
             "agent_controller": controller,
         }
+        if self.config.agent_probe_period is not None:
+            generation_kwargs["probe_period"] = self.config.agent_probe_period
         generate_fn = {
             "none": generate,
             "prefix": generate_with_prefix_cache,
@@ -361,6 +365,9 @@ class LLaDAPlannerRuntime:
         if controller is not None:
             metrics["agent_priority"] = controller.metrics()
             metrics["agent_priority"]["policy"] = self.config.policy
+            probe_forwards = int(getattr(controller, "probe_forwards", 0) or 0)
+            metrics["probe_forwards"] = probe_forwards
+            metrics["total_forwards"] = int(nfe) + probe_forwards
         return content, usage, metrics
 
 
@@ -625,6 +632,20 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--agent_probe_period",
+        type=int,
+        default=None,
+        help=(
+            "Experimental periodic cross-block Agent probing: every N local "
+            "denoising steps inside a block, run one extra read-only "
+            "full-sequence forward and feed only the Agent prediction "
+            "observer. Providing any value (including 0 = block-start "
+            "observations only) also disables speculative Agent-name writes, "
+            "so the generation trajectory stays identical to vanilla Dual "
+            "Cache decoding for P0/P4/P8 alike."
+        ),
+    )
+    parser.add_argument(
         "--plan_json_repair",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -650,6 +671,13 @@ def main():
         raise ValueError("agent_discovery_steps must be positive.")
     if args.agent_timing_slots < args.agent_slots:
         raise ValueError("agent_timing_slots must be at least agent_slots.")
+    if args.agent_probe_period is not None:
+        if args.agent_probe_period < 0:
+            raise ValueError("agent_probe_period must be a non-negative integer.")
+        if args.cache_mode != "dual":
+            raise ValueError(
+                "Periodic Agent probing requires --cache_mode dual."
+            )
 
     runtime = LLaDAPlannerRuntime(
         ServerConfig(
@@ -669,6 +697,7 @@ def main():
             agent_anchor_margin=args.agent_anchor_margin,
             agent_discovery_steps=args.agent_discovery_steps,
             agent_timing_log_path=args.agent_timing_log_path,
+            agent_probe_period=args.agent_probe_period,
             plan_json_repair=args.plan_json_repair,
             policy=args.policy,
             api_key=args.api_key,

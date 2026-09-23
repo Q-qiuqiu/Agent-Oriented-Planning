@@ -295,7 +295,7 @@ def generate_with_prefix_cache(model, prompt, steps=128, gen_length=128, block_l
 def generate_with_dual_cache(
     model, prompt, steps=128, gen_length=128, block_length=128, temperature=0.,
     remasking="low_confidence", mask_id=126336, threshold=None, factor=None,
-    agent_controller=None, step_callback=None
+    agent_controller=None, step_callback=None, probe_period=None,
 ):
     B = prompt.shape[0]
     Lp = int(prompt.shape[1])  # Python int, not Tensor
@@ -304,6 +304,12 @@ def generate_with_dual_cache(
 
     assert steps % num_blocks == 0
     steps_per_block = steps // num_blocks
+
+    if probe_period is not None and probe_period > 0 and probe_period >= steps_per_block:
+        raise ValueError(
+            "probe_period must be smaller than steps_per_block so probes fit "
+            "inside a block's local refinement."
+        )
 
     # x: (B, Lp + gen_length)
     x = torch.full((B, Lp + gen_length), mask_id, dtype=torch.long, device=model.device)
@@ -438,6 +444,28 @@ def generate_with_dual_cache(
             if step_callback is not None:
                 step_callback(nfe, nb, i, x)
 
+            # Periodic cross-block Agent probe (experimental, read-only).
+            # Every probe_period local refinement steps, run one extra
+            # full-sequence forward with use_cache=False and feed only the
+            # Agent prediction observer.  The probe never touches x, the
+            # block KV cache, the decoder mask, or the transfer schedule, so
+            # the generation trajectory and NFE are identical to P0.
+            if (
+                probe_period
+                and i % probe_period == 0
+                and agent_controller is not None
+                and agent_controller.enabled
+                and agent_controller.probing_active()
+            ):
+                probe_output = model(x, use_cache=False)
+                agent_controller.observe_probe(
+                    probe_output.logits,
+                    x,
+                    logits_start=0,
+                    global_step=nb * steps_per_block + i,
+                )
+                del probe_output
+
         # Do not retain this block's full KV cache while the next block builds
         # a new cache with another full-sequence forward.
         del past_key_values
@@ -446,6 +474,223 @@ def generate_with_dual_cache(
         agent_controller.finalize(x)
     return x, nfe
 
+
+
+@torch.no_grad()
+def generate_with_fixed_canvas_dual_cache(
+    model, prompt, steps=128, gen_length=128, block_length=128,
+    temperature=0., remasking="low_confidence", mask_id=126336,
+    threshold=None, factor=None, agent_controller=None,
+    structure_mode="fixed_canvas_vanilla",
+):
+    """Dual Cache decoding with model-generated dynamic END boundaries.
+
+    Token proposal, confidence and transfer selection remain vanilla.  The
+    opening section markers are fixed, while both END markers must be emitted
+    by the model.  A discovered END marker shrinks the active transfer mask;
+    once all holes before it are filled, unused capacity is compacted away.
+    """
+    if structure_mode not in {"fixed_canvas_vanilla", "fixed_canvas_plan_first"}:
+        raise ValueError(f"Unsupported fixed canvas mode {structure_mode!r}.")
+    if agent_controller is None or not agent_controller.enabled:
+        raise ValueError("Fixed canvas decoding requires FixedCanvasMonitor.")
+    if factor is not None:
+        raise ValueError("Fixed canvas keeps vanilla transfer policy; factor is unsupported.")
+
+    batch = prompt.shape[0]
+    prompt_length = int(prompt.shape[1])
+    if batch != 1:
+        raise ValueError("Fixed canvas currently requires batch size 1.")
+    if gen_length % block_length != 0:
+        raise ValueError("gen_length must be divisible by block_length.")
+    configured_blocks = gen_length // block_length
+    if steps % configured_blocks != 0:
+        raise ValueError("steps must be divisible by the physical block count.")
+    steps_per_block = steps // configured_blocks
+
+    layout = agent_controller.layout
+    x = torch.full(
+        (batch, prompt_length + layout.initial_canvas_length), mask_id,
+        dtype=torch.long, device=model.device,
+    )
+    x[:, :prompt_length] = prompt
+    agent_controller.initialize(x)
+
+    def region_blocks(region):
+        start = (
+            layout.reasoning_start if region == "reasoning" else layout.plan_start
+        )
+        end = (
+            layout.reasoning_storage_end
+            if region == "reasoning"
+            else layout.plan_storage_end
+        )
+        first = (start - prompt_length) // block_length
+        last = (end - 1 - prompt_length) // block_length
+        return list(range(first, last + 1))
+
+    phases = (
+        ("reasoning", "plan")
+        if structure_mode == "fixed_canvas_vanilla"
+        else ("plan", "reasoning")
+    )
+    nfe = 0
+    global_step = 0
+    schedule_log = []
+    schedule_round = 0
+
+    for phase in phases:
+        agent_controller.start_phase(phase)
+        phase_finished = False
+        # Recompute physical blocks at phase entry.  The preceding phase may
+        # have compacted the sequence and shifted every later position.
+        for block_id in region_blocks(phase):
+            block_start = prompt_length + block_id * block_length
+            block_end = min(block_start + block_length, x.shape[1])
+            region_mask = layout.bool_mask(x, phase)
+            allowed_full = (x == mask_id) & region_mask
+            allowed_full[:, :block_start] = False
+            allowed_full[:, block_end:] = False
+            initial_masks = int(allowed_full.sum().item())
+            if initial_masks == 0:
+                schedule_log.append({
+                    "round": schedule_round,
+                    "phase": phase,
+                    "physical_block": block_id,
+                    "initial_masks": 0,
+                    "remaining_masks": 0,
+                    "local_steps": 0,
+                    "skipped": True,
+                })
+                schedule_round += 1
+                continue
+
+            block_allowed = allowed_full[:, block_start:block_end]
+            quotas = get_num_transfer_tokens(block_allowed, steps_per_block)
+
+            # A fresh full warmup is mandatory for every physical-block visit.
+            out_full = model(x, use_cache=True)
+            past_key_values = out_full.past_key_values
+            nfe += 1
+            replace_position = torch.zeros_like(x, dtype=torch.bool)
+            replace_position[:, block_start:block_end] = True
+
+            quota0 = None if threshold is not None else quotas[:, 0]
+            x0, transfer_index = get_transfer_index(
+                out_full.logits,
+                temperature,
+                remasking,
+                allowed_full,
+                x,
+                quota0,
+                threshold,
+            )
+            del out_full
+            x = torch.where(transfer_index, x0, x)
+            agent_controller.observe_end_marker(x, phase)
+            completed_this_visit = False
+            if agent_controller.phase_ready(x, phase):
+                x, completed_this_visit = agent_controller.finish_phase(x, phase)
+                phase_finished = completed_this_visit
+            agent_controller.record_step(
+                x,
+                global_step=global_step,
+                nfe=nfe,
+                physical_block=block_id,
+                local_step=0,
+            )
+            global_step += 1
+            local_steps = 1
+
+            for local_step in range(1, steps_per_block):
+                if completed_this_visit:
+                    break
+                # Marker discovery can shrink the region during this visit.
+                region_mask = layout.bool_mask(x, phase)
+                allowed_block = (
+                    (x[:, block_start:block_end] == mask_id)
+                    & region_mask[:, block_start:block_end]
+                )
+                if int(allowed_block.sum().item()) == 0:
+                    if agent_controller.phase_ready(x, phase):
+                        x, completed_this_visit = agent_controller.finish_phase(x, phase)
+                        phase_finished = completed_this_visit
+                    break
+                logits_block = model(
+                    x[:, block_start:block_end],
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                    replace_position=replace_position,
+                ).logits
+                nfe += 1
+                quota = None if threshold is not None else quotas[:, local_step]
+                x0_block, transfer_block = get_transfer_index(
+                    logits_block,
+                    temperature,
+                    remasking,
+                    allowed_block,
+                    x[:, block_start:block_end],
+                    quota,
+                    threshold,
+                )
+                new_block = torch.where(
+                    transfer_block, x0_block, x[:, block_start:block_end]
+                )
+                x = torch.cat(
+                    [x[:, :block_start], new_block, x[:, block_end:]], dim=1
+                )
+                del logits_block
+                agent_controller.observe_end_marker(x, phase)
+                if agent_controller.phase_ready(x, phase):
+                    x, completed_this_visit = agent_controller.finish_phase(x, phase)
+                    phase_finished = completed_this_visit
+                agent_controller.record_step(
+                    x,
+                    global_step=global_step,
+                    nfe=nfe,
+                    physical_block=block_id,
+                    local_step=local_step,
+                )
+                global_step += 1
+                local_steps += 1
+
+            # No cache built against the pre-compaction coordinates may cross
+            # this visit or phase boundary.
+            del past_key_values
+            if completed_this_visit:
+                remaining = 0
+            else:
+                region_mask = layout.bool_mask(x, phase)
+                remaining = int((
+                    (x[:, block_start:min(block_end, x.shape[1])] == mask_id)
+                    & region_mask[:, block_start:min(block_end, x.shape[1])]
+                ).sum().item())
+            schedule_log.append({
+                "round": schedule_round,
+                "phase": phase,
+                "physical_block": block_id,
+                "initial_masks": initial_masks,
+                "remaining_masks": remaining,
+                "local_steps": local_steps,
+                "skipped": False,
+                "end_marker_found": agent_controller.marker_offsets[phase] is not None,
+                "phase_compacted": completed_this_visit,
+                "phase_valid": agent_controller.phase_valid[phase],
+            })
+            schedule_round += 1
+            if phase_finished:
+                break
+
+        if not phase_finished:
+            # No natural END appeared before all 499 capacity positions were
+            # consumed.  Keep the generated capacity for existing parser/
+            # repair fallback and explicitly record the exhaustion.
+            if agent_controller.phase_remaining_masks(x, phase) == 0:
+                agent_controller.mark_capacity_exhausted(phase)
+
+    agent_controller.schedule_log = schedule_log
+    agent_controller.finalize(x)
+    return x, nfe
 
 
 def get_transfer_index(

@@ -18,7 +18,12 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "mmlu_full_reasoning_first_v2"
+# v3 = base_llada detection-slowdown variant: identical rules, markers and
+# JSON schema, but the PLANNING_REASONING instruction now demands one detailed
+# paragraph per agent plus a synthesis paragraph, so the PLAN_JSON block (and
+# therefore the "agent":" anchors the timing monitor detects) starts much
+# later in the response.
+FULL_PROMPT_VERSION = "mmlu_full_reasoning_first_long_v3_3sent"
 
 
 def remove_json_example(prompt, introduction):
@@ -57,8 +62,14 @@ FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + """
 Produce the same three-task plan, but use the output structure below.
 
 PLANNING_REASONING
-Briefly explain why the three independent perspectives cover the question.
-Do not solve the question and do not place JSON in this section.
+Before the plan, write a thorough planning analysis. For EACH of the three
+agents, write one paragraph of about two sentences describing
+the perspective it contributes, the method and kind of evidence it relies on,
+and why that angle alone is insufficient without the other two perspectives.
+Then finish with one synthesis paragraph explaining how the three views
+complement each other and jointly reduce the risk of a wrong answer.
+Do not solve the question, do not choose an option, and do not place JSON in
+this section.
 END_PLANNING_REASONING
 
 PLAN_JSON
@@ -72,12 +83,12 @@ END_PLAN_JSON
 
 CONFIG = {
     "input": "benchmarks/mmlu/mmlu_pro_sampled.json",
-    "plans_output": "benchmarks/mmlu/mmlu_plans_base_lladav2.json",
-    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_base_lladav2.json",
-    "planner_api_url": "http://10.137.144.97:7007/v1",
+    "plans_output": "benchmarks/mmlu/mmlu_plans_base_llama3.json",
+    "benchmark_output": "benchmarks/mmlu/mmlu_subtask_base_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7004/v1",
     "planner_api_key": "empty",
-    "planner_model": "/data/labshare/Param/llada",
-    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llada",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,
@@ -170,7 +181,7 @@ def build_plans(queries, config):
             "source": "TIGER-Lab/MMLU-Pro",
             **query,
             "planner_model": config["planner_model"],
-            "planner_mode": "reasoning_then_json",
+            "planner_mode": "reasoning_long_then_json",
             "planner_prompt_version": FULL_PROMPT_VERSION,
         }
         try:
@@ -207,7 +218,7 @@ def build_plans(queries, config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build MMLU-Pro full plans.")
+    parser = argparse.ArgumentParser(description="Build MMLU-Pro full plans (long reasoning).")
     parser.add_argument("--input", default=CONFIG["input"])
     parser.add_argument("--plans-output", default=CONFIG["plans_output"])
     parser.add_argument("--benchmark-output", default=CONFIG["benchmark_output"])

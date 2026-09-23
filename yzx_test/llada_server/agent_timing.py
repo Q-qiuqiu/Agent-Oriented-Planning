@@ -207,6 +207,11 @@ class AgentTimingRecorder:
                     "confirmation_seconds": confirmation,
                     "decision_step": slot.get("recognized_step"),
                     "confirmation_step": slot.get("confirmed_step"),
+                    "predicted_seconds": slot.get("predicted_seconds"),
+                    "predicted_step": slot.get("predicted_step"),
+                    "materialized_seconds": slot.get("materialized_seconds"),
+                    "materialized_step": slot.get("materialized_step"),
+                    "materialized_candidate": slot.get("materialized_candidate"),
                     "probability": slot.get("probability"),
                     "margin": slot.get("margin"),
                     "confirmed": bool(slot.get("confirmed")),
@@ -264,6 +269,11 @@ class AgentTimingRecorder:
             "returned_tokens": metrics.get("returned_tokens"),
             "tps": metrics.get("tps"),
             "nfe": metrics.get("nfe"),
+            "probe_period": priority.get("probe_period"),
+            "probe_forwards": metrics.get("probe_forwards"),
+            "total_forwards": metrics.get("total_forwards"),
+            "plan_complete_seconds": priority.get("plan_complete_seconds"),
+            "plan_complete_step": priority.get("plan_complete_step"),
             "plan_json_repair": repair,
         }
 

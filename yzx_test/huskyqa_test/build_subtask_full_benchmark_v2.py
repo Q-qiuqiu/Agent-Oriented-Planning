@@ -7,21 +7,36 @@ from pathlib import Path
 import requests
 
 from openai_compat import auth_header, chat_completions_url
-from build_subtask_benchmark import AGENTS, normalize_plan as normalize_standard_plan
+from build_subtask_benchmark import (
+    AGENTS,
+    normalize_plan as normalize_standard_plan,
+    print_summary,
+)
 from prompt import planner_prompt
 
 
-FULL_PROMPT_VERSION = "huskyqa_full_reasoning_first_v2"
+# v3 = base_llada detection-slowdown variant: identical rules, markers and
+# JSON schema, but the PLANNING_REASONING instruction now demands one detailed
+# paragraph per selected agent plus a synthesis paragraph, so the PLAN_JSON
+# block (and therefore the "agent":" anchors the timing monitor detects)
+# starts much later in the response.
+FULL_PROMPT_VERSION = "huskyqa_full_reasoning_first_long_v3_3sent"
 
 FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
 and JSON plan that you would produce under the original instructions. The only
 additional requirement is to output the planning reasoning before that JSON.
 
 PLANNING_REASONING
-Explain the reasoning that led to the plan. This is an additional explanation,
-not a different planning task. Do not solve the subtasks in this section and do
-not introduce any agent-selection or decomposition rules beyond the original
-instructions. Do not put JSON or Markdown code fences in this section.
+Explain the reasoning that led to the plan in depth. For EACH agent you
+selected, write one paragraph of about two sentences describing
+the perspective it contributes, the method and kind of evidence it relies on,
+and why that angle alone is insufficient without the other selected agents.
+Then finish with one synthesis paragraph explaining how the selected views
+complement each other and why this decomposition fits the question. This is
+an additional explanation, not a different planning task. Do not solve the
+subtasks in this section and do not introduce any agent-selection or
+decomposition rules beyond the original instructions. Do not put JSON or
+Markdown code fences in this section.
 END_PLANNING_REASONING
 
 PLAN_JSON
@@ -76,12 +91,12 @@ FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + "\n\n" + FULL_OUTPUT_BLOCK
 # Edit these defaults directly before running the script.
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
-    "plans_output": "benchmarks/huskyqa/huskyqa_plans_base_lladav2.json",
-    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_base_lladav2.json",
-    "planner_api_url": "http://10.137.144.97:7006/v1",
+    "plans_output": "benchmarks/huskyqa/huskyqa_plans_base_llama3.json",
+    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_base_llama3.json",
+    "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
-    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
-    "planner_model": "/data/labshare/Param/llada",
+    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    #"planner_model": "/data/labshare/Param/llada",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,
@@ -234,7 +249,7 @@ def build_plans(queries, config):
             "query": row["query"],
             "answer": row.get("answer"),
             "planner_model": config["planner_model"],
-            "planner_mode": "reasoning_then_json",
+            "planner_mode": "reasoning_long_then_json",
             "planner_prompt_version": FULL_PROMPT_VERSION,
         }
         try:
@@ -311,7 +326,7 @@ def expand_plans(plans, agents):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build HuskyQA plans with visible reasoning and JSON subtasks."
+        description="Build HuskyQA plans with long visible reasoning and JSON subtasks."
     )
     parser.add_argument("--input", default=CONFIG["input"])
     parser.add_argument("--plans-output", default=CONFIG["plans_output"])
@@ -346,6 +361,7 @@ def main():
         f"Saved benchmark: {config['benchmark_output']} "
         f"({len(benchmark)} rows)"
     )
+    print_summary(plans)
 
 
 if __name__ == "__main__":

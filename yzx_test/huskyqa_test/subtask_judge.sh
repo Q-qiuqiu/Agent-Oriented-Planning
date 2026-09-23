@@ -2,7 +2,7 @@
 set -uo pipefail
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="base_llada"
+PLAN_VARIANT="full_llada"
 
 # Judge API configuration. These values override subtask_hetro.py.
 JUDGE_API_URL="http://10.137.144.97:7001/v1"
@@ -15,10 +15,10 @@ JUDGE_TIMEOUT="120"
 
 # Runs sequentially by default; pass --batch to run this list concurrently.
 ASSIGNMENTS=(
-  "g_g_g"
-  "l_l_l"
+  # "g_g_g"
+  # "l_l_l"
   "m_m_m"
-  "q_q_q"
+  # "q_q_q"
   "d_d_d"
   "qm_qm_qm"
   "qc_qc_qc"

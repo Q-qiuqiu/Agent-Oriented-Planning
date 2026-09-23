@@ -233,6 +233,21 @@ def expand_plans(plans, agents):
     return benchmark
 
 
+def print_summary(plans):
+    valid = [record for record in plans if record.get("plan")]
+    calls = Counter(
+        step["agent"] for record in valid for step in record["plan"]
+    )
+    errors = Counter(
+        record.get("error") for record in plans if record.get("error")
+    )
+    print("Planner summary")
+    print(f"  records={len(plans)} | valid={len(valid)} | errors={len(plans) - len(valid)}")
+    print(f"  agent_calls={dict(calls)}")
+    for message, count in errors.most_common(5):
+        print(f"  error[{count}]: {message}")
+
+
 def print_agent_selection_summary(plans):
     agent_calls = Counter()
     queries_using_agent = Counter()

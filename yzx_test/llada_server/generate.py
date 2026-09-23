@@ -295,7 +295,7 @@ def generate_with_prefix_cache(model, prompt, steps=128, gen_length=128, block_l
 def generate_with_dual_cache(
     model, prompt, steps=128, gen_length=128, block_length=128, temperature=0.,
     remasking="low_confidence", mask_id=126336, threshold=None, factor=None,
-    agent_controller=None, step_callback=None
+    agent_controller=None, step_callback=None, probe_period=None,
 ):
     B = prompt.shape[0]
     Lp = int(prompt.shape[1])  # Python int, not Tensor
@@ -304,6 +304,12 @@ def generate_with_dual_cache(
 
     assert steps % num_blocks == 0
     steps_per_block = steps // num_blocks
+
+    if probe_period is not None and probe_period > 0 and probe_period >= steps_per_block:
+        raise ValueError(
+            "probe_period must be smaller than steps_per_block so probes fit "
+            "inside a block's local refinement."
+        )
 
     # x: (B, Lp + gen_length)
     x = torch.full((B, Lp + gen_length), mask_id, dtype=torch.long, device=model.device)
@@ -437,6 +443,28 @@ def generate_with_dual_cache(
             nfe += 1
             if step_callback is not None:
                 step_callback(nfe, nb, i, x)
+
+            # Periodic cross-block Agent probe (experimental, read-only).
+            # Every probe_period local refinement steps, run one extra
+            # full-sequence forward with use_cache=False and feed only the
+            # Agent prediction observer.  The probe never touches x, the
+            # block KV cache, the decoder mask, or the transfer schedule, so
+            # the generation trajectory and NFE are identical to P0.
+            if (
+                probe_period
+                and i % probe_period == 0
+                and agent_controller is not None
+                and agent_controller.enabled
+                and agent_controller.probing_active()
+            ):
+                probe_output = model(x, use_cache=False)
+                agent_controller.observe_probe(
+                    probe_output.logits,
+                    x,
+                    logits_start=0,
+                    global_step=nb * steps_per_block + i,
+                )
+                del probe_output
 
         # Do not retain this block's full KV cache while the next block builds
         # a new cache with another full-sequence forward.

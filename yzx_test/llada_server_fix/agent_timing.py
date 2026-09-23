@@ -207,18 +207,15 @@ class AgentTimingRecorder:
                     "confirmation_seconds": confirmation,
                     "decision_step": slot.get("recognized_step"),
                     "confirmation_step": slot.get("confirmed_step"),
+                    "predicted_seconds": slot.get("predicted_seconds"),
+                    "predicted_step": slot.get("predicted_step"),
+                    "materialized_seconds": slot.get("materialized_seconds"),
+                    "materialized_step": slot.get("materialized_step"),
+                    "materialized_candidate": slot.get("materialized_candidate"),
                     "probability": slot.get("probability"),
                     "margin": slot.get("margin"),
                     "confirmed": bool(slot.get("confirmed")),
                     "fuzzy_matched_from": slot.get("fuzzy_matched_from"),
-                    "final_agent": slot.get("final_agent"),
-                    "final_agent_seconds": slot.get("final_agent_seconds"),
-                    "final_agent_step": slot.get("final_agent_step"),
-                    "prediction_correct": slot.get("prediction_correct"),
-                    "decision_source": slot.get("decision_source"),
-                    "switch_required": bool(slot.get("switch_required")),
-                    "switch_seconds": slot.get("switch_seconds"),
-                    "switch_step": slot.get("switch_step"),
                 }
             )
 
@@ -256,32 +253,6 @@ class AgentTimingRecorder:
             "policy": policy,
             "priority_slots": priority.get("priority_slots"),
             "tracking_slots": priority.get("tracking_slots"),
-            "agent_prediction_method": priority.get("method"),
-            "agent_probability_threshold": priority.get(
-                "probability_threshold"
-            ),
-            "agent_margin_threshold": priority.get("margin_threshold"),
-            "agent_name_stable_steps": priority.get("name_stable_steps"),
-            "prediction_checked_count": priority.get("prediction_checked_count"),
-            "prediction_correct_count": priority.get("prediction_correct_count"),
-            "prediction_accuracy": priority.get("prediction_accuracy"),
-            "predicted_agent_sequence": priority.get("predicted_agent_sequence"),
-            "sequence_probability": priority.get("sequence_probability"),
-            "sequence_margin": priority.get("sequence_margin"),
-            "sequence_consistent_steps": priority.get(
-                "sequence_consistent_steps"
-            ),
-            "prefetch_switch_count": priority.get("prefetch_switch_count"),
-            "last_agent_correction_seconds": priority.get(
-                "last_agent_correction_seconds"
-            ),
-            "all_final_agents_seconds": priority.get("all_final_agents_seconds"),
-            "effective_all_agents_ready_seconds": priority.get(
-                "effective_all_agents_ready_seconds"
-            ),
-            "effective_prefetch_lead_seconds": priority.get(
-                "effective_prefetch_lead_seconds"
-            ),
             "all_priority_agents_recognized": priority.get(
                 "all_priority_agents_recognized"
             ),
@@ -298,7 +269,41 @@ class AgentTimingRecorder:
             "returned_tokens": metrics.get("returned_tokens"),
             "tps": metrics.get("tps"),
             "nfe": metrics.get("nfe"),
+            "probe_period": priority.get("probe_period"),
+            "probe_forwards": metrics.get("probe_forwards"),
+            "total_forwards": metrics.get("total_forwards"),
+            "plan_complete_seconds": priority.get("plan_complete_seconds"),
+            "plan_complete_step": priority.get("plan_complete_step"),
             "plan_json_repair": repair,
+            "structure_mode": metrics.get("structure_mode"),
+            "raw_output_sha256": metrics.get("raw_output_sha256"),
+            "raw_output_token_ids": metrics.get("raw_output_token_ids"),
+            "unresolved_mask_count": metrics.get("unresolved_mask_count"),
+            # The fixed-canvas payload intentionally includes the compact
+            # per-transfer trajectory used for retrospective First-3 timing.
+            # It is absent for the unchanged dual_vanilla path.
+            "fixed_canvas": metrics.get("fixed_canvas"),
+            "reasoning_end_seconds": priority.get("reasoning_end_seconds"),
+            "plan_json_start_seconds": priority.get("plan_json_start_seconds"),
+            "plan_parseable_seconds": priority.get("plan_parseable_seconds"),
+            "first_agent_seconds": priority.get("first_agent_seconds"),
+            "first3_agent_seconds": priority.get("first3_agent_seconds"),
+            "all_final_agent_seconds": priority.get("all_final_agent_seconds"),
+            "final_agent_sequence": priority.get("final_agent_sequence"),
+            "first3_tuple": priority.get("first3_tuple"),
+            "plan_effective_tokens": priority.get("plan_effective_tokens"),
+            "plan_capacity": priority.get("plan_capacity"),
+            "unused_plan_capacity": priority.get("unused_plan_capacity"),
+            "plan_capacity_utilization": priority.get("plan_capacity_utilization"),
+            "plan_json_complete": priority.get("plan_json_complete"),
+            "plan_json_complete_seconds": priority.get(
+                "plan_json_complete_seconds"
+            ),
+            "plan_capacity_overflow": priority.get("plan_capacity_overflow"),
+            "plan_tokens_after_json_before_detection": priority.get(
+                "plan_tokens_after_json_before_detection"
+            ),
+            "reasoning_effective_tokens": priority.get("reasoning_effective_tokens"),
         }
 
         with self._lock:
