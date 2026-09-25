@@ -1,4 +1,4 @@
-"""Durable, retry-aware Agent decision timing records for the LLaDA server."""
+"""Compact Agent prediction/materialization timing records."""
 
 from __future__ import annotations
 
@@ -18,27 +18,17 @@ LOGGER = logging.getLogger("fastdllm.agent_timing")
 
 
 class AgentTimingRecorder:
-    """Keep one latest JSONL record per stable model/query request identity.
+    """Keep one latest compact JSONL record per model/query/method."""
 
-    ``request_index`` is only a stable display/order field. The upsert key is a
-    hash of ``model``, ``query``, and (when present) decoding ``policy`` because
-    the server-side index restarts when the server restarts, while a resumed
-    benchmark can skip successful cases. Including policy keeps planreason and
-    reasonplan comparison runs from overwriting one another.
-    """
-
-    schema_version = 2
+    schema_version = 3
 
     def __init__(self, log_path: str) -> None:
         if not log_path:
             raise ValueError("Agent timing log path cannot be empty.")
         self.log_path = Path(log_path).expanduser().resolve()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        # Fail at server startup rather than halfway through a benchmark when
-        # the configured destination cannot be created.
         with self.log_path.open("a", encoding="utf-8"):
             pass
-
         self.session_id = f"agent-session-{uuid.uuid4().hex}"
         self.started_unix = time.time()
         self._lock = threading.Lock()
@@ -46,45 +36,110 @@ class AgentTimingRecorder:
         self._records = self._load_canonical_records()
 
     @staticmethod
-    def _query_metadata(query: str) -> Dict[str, str]:
-        encoded = query.encode("utf-8")
-        return {
-            "query": query,
-            "query_sha256": hashlib.sha256(encoded).hexdigest(),
-        }
-
-    @staticmethod
-    def _request_key(
-        model: str, query: str, policy: Optional[str] = None
-    ) -> str:
-        identity_text = f"{model}\0{query}"
-        if policy:
-            identity_text += f"\0policy={policy}"
-        identity = identity_text.encode("utf-8")
-        return hashlib.sha256(identity).hexdigest()
+    def _request_key(model: str, query: str, method: Optional[str]) -> str:
+        value = f"{model}\0{query}\0method={method or 'base'}"
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     @classmethod
     def _record_key(cls, record: Dict[str, Any]) -> str:
-        model = str(record.get("model") or "")
         query = record.get("query")
         if query is not None:
             return cls._request_key(
-                model,
-                str(query),
-                record.get("policy"),
+                str(record.get("model") or ""), str(query),
+                record.get("method") or record.get("policy"),
             )
-        # Legacy fallback only. New records always contain the original query.
         query_hash = str(record.get("query_sha256") or "")
         if not query_hash:
             raise ValueError("Timing record has neither query nor query_sha256.")
         return hashlib.sha256(
-            f"legacy\0{model}\0{query_hash}".encode("utf-8")
+            f"legacy\0{record.get('model')}\0{query_hash}".encode("utf-8")
         ).hexdigest()
 
+    @staticmethod
+    def _slot_prediction(slot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        candidates = (
+            (slot.get("prefetched_agent"), slot.get("T_slot_prefetch"),
+             slot.get("prefetch_source")),
+            (slot.get("predicted_agent"), slot.get("predicted_seconds"),
+             "plan_region_observer"),
+            (slot.get("shadow_agent"), slot.get("shadow_seconds"),
+             "plan_region_observer"),
+            (slot.get("committed_agent"), slot.get("committed_seconds"),
+             "commit"),
+        )
+        for agent, seconds, source in candidates:
+            if agent is None or seconds is None or source == "natural":
+                continue
+            return {
+                "slot": slot.get("slot"),
+                "agent": str(agent),
+                "seconds": float(seconds),
+                "source": source or "observer",
+                "probability": slot.get("probability"),
+                "margin": slot.get("margin"),
+            }
+        return None
+
+    @staticmethod
+    def _slot_natural(slot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        agent = (slot.get("materialized_candidate")
+                 or slot.get("natural_decoded_agent") or slot.get("agent"))
+        seconds = slot.get("materialized_seconds")
+        if seconds is None:
+            seconds = slot.get("T_natural_decode")
+        if seconds is None:
+            seconds = slot.get("confirmation_seconds")
+        if agent is None or seconds is None:
+            return None
+        return {"slot": slot.get("slot"), "agent": str(agent),
+                "seconds": float(seconds)}
+
+    @classmethod
+    def _compact_record(cls, record: Dict[str, Any]) -> Dict[str, Any]:
+        slots = record.get("agents") or []
+        predicted = [cls._slot_prediction(slot) for slot in slots]
+        natural = [cls._slot_natural(slot) for slot in slots]
+        predicted = [row for row in predicted if row is not None]
+        natural = [row for row in natural if row is not None]
+        method = record.get("method") or record.get("policy") or "base"
+        query = str(record.get("query") or "")
+        return {
+            "schema_version": cls.schema_version,
+            "session_id": record.get("session_id"),
+            "request_key": cls._request_key(
+                str(record.get("model") or ""), query, method
+            ) if query else record.get("request_key"),
+            "request_index": record.get("request_index"),
+            "attempt_count": record.get("attempt_count", 1),
+            "first_created_unix": record.get(
+                "first_created_unix", record.get("created_unix")),
+            "completion_id": record.get("completion_id"),
+            "created_unix": record.get("created_unix"),
+            "query": query,
+            "query_sha256": record.get("query_sha256") or hashlib.sha256(
+                query.encode("utf-8")).hexdigest(),
+            "model": record.get("model"),
+            "method": method,
+            "status": record.get("status", "ok"),
+            "error": record.get("error"),
+            "predicted_agents": predicted,
+            "natural_agents": natural,
+            "first3_prediction_seconds": max(
+                (row["seconds"] for row in predicted[:3]), default=None
+            ) if len(predicted) >= 3 else None,
+            "first3_natural_seconds": max(
+                (row["seconds"] for row in natural[:3]), default=None
+            ) if len(natural) >= 3 else None,
+            "all_natural_seconds": max(
+                (row["seconds"] for row in natural), default=None),
+            "generation_seconds": record.get("generation_seconds"),
+            "nfe": record.get("nfe"),
+        }
+
     def _read_records_from_disk(self) -> List[Dict[str, Any]]:
-        records: List[Dict[str, Any]] = []
-        with self.log_path.open("r", encoding="utf-8") as file:
-            for line_number, line in enumerate(file, start=1):
+        records = []
+        with self.log_path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, 1):
                 if not line.strip():
                     continue
                 try:
@@ -94,146 +149,70 @@ class AgentTimingRecorder:
                         f"Invalid timing JSONL at {self.log_path}:{line_number}: {exc}"
                     ) from exc
                 if not isinstance(value, dict):
-                    raise ValueError(
-                        f"Timing JSONL record at {self.log_path}:{line_number} "
-                        "must be a JSON object."
-                    )
+                    raise ValueError("Timing JSONL records must be JSON objects.")
                 records.append(value)
         return records
 
     def _atomic_write_log(self, records: List[Dict[str, Any]]) -> None:
         temporary = self.log_path.with_suffix(self.log_path.suffix + ".tmp")
-        with temporary.open("w", encoding="utf-8") as file:
+        with temporary.open("w", encoding="utf-8") as handle:
             for record in records:
-                file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         os.replace(temporary, self.log_path)
 
     def _backup_legacy_log(self) -> Path:
         suffix = self.session_id.rsplit("-", 1)[-1][:12]
         backup = self.log_path.with_name(
-            f"{self.log_path.name}.precanonical.{suffix}.bak"
-        )
+            f"{self.log_path.name}.precanonical.{suffix}.bak")
         shutil.copy2(self.log_path, backup)
         self._migration_backup_path = str(backup)
         return backup
 
     def _load_canonical_records(self) -> Dict[str, Dict[str, Any]]:
-        raw_records = self._read_records_from_disk()
+        raw = self._read_records_from_disk()
         canonical: Dict[str, Dict[str, Any]] = {}
-        migration_needed = False
-
-        for raw in raw_records:
-            record = dict(raw)
+        migration = any(row.get("schema_version") != self.schema_version for row in raw)
+        for source in raw:
+            record = (dict(source) if source.get("schema_version") == self.schema_version
+                      else self._compact_record(source))
             key = self._record_key(record)
             previous = canonical.get(key)
-            if previous is None:
-                attempt_count = max(1, int(record.get("attempt_count") or 1))
-                first_created = record.get("first_created_unix")
-                if first_created is None:
-                    first_created = record.get("created_unix")
-            else:
-                migration_needed = True
-                previous_attempts = max(
-                    1, int(previous.get("attempt_count") or 1)
-                )
-                attempt_count = max(
-                    previous_attempts + 1,
+            if previous is not None:
+                migration = True
+                record["attempt_count"] = max(
                     int(record.get("attempt_count") or 1),
-                )
-                first_created = previous.get(
-                    "first_created_unix", previous.get("created_unix")
-                )
-
-            expected_index = (
-                int(previous["request_index"])
-                if previous is not None
-                else len(canonical) + 1
-            )
-            if (
-                record.get("schema_version") != self.schema_version
-                or record.get("request_key") != key
-                or record.get("request_index") != expected_index
-                or record.get("attempt_count") != attempt_count
-                or record.get("first_created_unix") != first_created
-            ):
-                migration_needed = True
-
-            record["schema_version"] = self.schema_version
-            record["request_key"] = key
-            record["request_index"] = expected_index
-            record["attempt_count"] = attempt_count
-            record["first_created_unix"] = first_created
+                    int(previous.get("attempt_count") or 1) + 1)
+                record["first_created_unix"] = previous.get(
+                    "first_created_unix", previous.get("created_unix"))
+                record["request_index"] = previous.get("request_index")
+            elif record.get("request_index") is None:
+                migration = True
+                record["request_index"] = len(canonical) + 1
             canonical[key] = record
-
-        if migration_needed and raw_records:
-            backup = self._backup_legacy_log()
+        if migration and raw:
+            self._backup_legacy_log()
             self._atomic_write_log(list(canonical.values()))
-            LOGGER.info(
-                "agent_timing_migrated input_records=%d canonical_records=%d "
-                "backup=%s",
-                len(raw_records),
-                len(canonical),
-                backup,
-            )
         return canonical
 
-    def record(
-        self,
-        *,
-        completion_id: str,
-        created_unix: int,
-        query: str,
-        model: str,
-        temperature: float,
-        requested_max_tokens: Optional[int],
-        metrics: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    def record(self, *, completion_id: str, created_unix: int, query: str,
+               model: str, temperature: float,
+               requested_max_tokens: Optional[int],
+               metrics: Optional[Dict[str, Any]] = None,
+               error: Optional[str] = None) -> Dict[str, Any]:
+        del temperature, requested_max_tokens
         metrics = metrics or {}
         priority = metrics.get("agent_priority") or {}
-        agents = []
-        for slot in priority.get("agent_slots") or []:
-            name = slot.get("agent")
-            decision = slot.get("recognized_seconds")
-            confirmation = slot.get("confirmed_seconds")
-            if name is None and decision is None and confirmation is None:
-                continue
-            agents.append(
-                {
-                    "slot": slot.get("slot"),
-                    "agent": name,
-                    "priority": bool(slot.get("priority")),
-                    "decision_seconds": decision,
-                    "confirmation_seconds": confirmation,
-                    "decision_step": slot.get("recognized_step"),
-                    "confirmation_step": slot.get("confirmed_step"),
-                    "predicted_seconds": slot.get("predicted_seconds"),
-                    "predicted_step": slot.get("predicted_step"),
-                    "materialized_seconds": slot.get("materialized_seconds"),
-                    "materialized_step": slot.get("materialized_step"),
-                    "materialized_candidate": slot.get("materialized_candidate"),
-                    "probability": slot.get("probability"),
-                    "margin": slot.get("margin"),
-                    "confirmed": bool(slot.get("confirmed")),
-                    "fuzzy_matched_from": slot.get("fuzzy_matched_from"),
-                }
-            )
-
-        decisions = [
-            float(item["decision_seconds"])
-            for item in agents
-            if item["decision_seconds"] is not None
-        ]
-        confirmations = [
-            float(item["confirmation_seconds"])
-            for item in agents
-            if item["confirmation_seconds"] is not None
-        ]
-        all_decided = max(decisions) if decisions else None
-        all_confirmed = max(confirmations) if confirmations else None
-        repair = metrics.get("plan_json_repair") or None
-        policy = priority.get("policy")
-        request_key = self._request_key(model, query, policy)
+        slots = priority.get("agent_slots") or []
+        predicted = [self._slot_prediction(slot) for slot in slots]
+        natural = [self._slot_natural(slot) for slot in slots]
+        predicted = [row for row in predicted if row is not None]
+        natural = [row for row in natural if row is not None]
+        natural_by_slot = {row["slot"]: row for row in natural}
+        for row in predicted:
+            expected = natural_by_slot.get(row["slot"])
+            row["correct"] = row["agent"] == expected["agent"] if expected else None
+        method = str(metrics.get("method") or priority.get("policy") or "base")
+        request_key = self._request_key(model, query, method)
         record = {
             "schema_version": self.schema_version,
             "session_id": self.session_id,
@@ -243,69 +222,25 @@ class AgentTimingRecorder:
             "first_created_unix": None,
             "completion_id": completion_id,
             "created_unix": int(created_unix),
-            **self._query_metadata(query),
+            "query": query,
+            "query_sha256": hashlib.sha256(query.encode("utf-8")).hexdigest(),
             "model": model,
-            "temperature": float(temperature),
-            "requested_max_tokens": requested_max_tokens,
+            "method": method,
             "status": "error" if error else "ok",
             "error": error,
-            "agent_registry": priority.get("catalog"),
-            "policy": policy,
-            "priority_slots": priority.get("priority_slots"),
-            "tracking_slots": priority.get("tracking_slots"),
-            "all_priority_agents_recognized": priority.get(
-                "all_priority_agents_recognized"
-            ),
-            "all_tracked_agents_recognized": priority.get(
-                "all_tracked_agents_recognized"
-            ),
-            "agents": agents,
-            "agent_decision_count": len(decisions),
-            "agent_confirmation_count": len(confirmations),
-            "all_agents_decided_seconds": all_decided,
-            "all_agents_confirmed_seconds": all_confirmed,
+            "predicted_agents": predicted,
+            "natural_agents": natural,
+            "first3_prediction_seconds": max(
+                (row["seconds"] for row in predicted[:3]), default=None
+            ) if len(predicted) >= 3 else None,
+            "first3_natural_seconds": max(
+                (row["seconds"] for row in natural[:3]), default=None
+            ) if len(natural) >= 3 else None,
+            "all_natural_seconds": max(
+                (row["seconds"] for row in natural), default=None),
             "generation_seconds": metrics.get("generation_seconds"),
-            "generated_tokens": metrics.get("generated_tokens"),
-            "returned_tokens": metrics.get("returned_tokens"),
-            "tps": metrics.get("tps"),
             "nfe": metrics.get("nfe"),
-            "probe_period": priority.get("probe_period"),
-            "probe_forwards": metrics.get("probe_forwards"),
-            "total_forwards": metrics.get("total_forwards"),
-            "plan_complete_seconds": priority.get("plan_complete_seconds"),
-            "plan_complete_step": priority.get("plan_complete_step"),
-            "plan_json_repair": repair,
-            "structure_mode": metrics.get("structure_mode"),
-            "raw_output_sha256": metrics.get("raw_output_sha256"),
-            "raw_output_token_ids": metrics.get("raw_output_token_ids"),
-            "unresolved_mask_count": metrics.get("unresolved_mask_count"),
-            # The fixed-canvas payload intentionally includes the compact
-            # per-transfer trajectory used for retrospective First-3 timing.
-            # It is absent for the unchanged dual_vanilla path.
-            "fixed_canvas": metrics.get("fixed_canvas"),
-            "reasoning_end_seconds": priority.get("reasoning_end_seconds"),
-            "plan_json_start_seconds": priority.get("plan_json_start_seconds"),
-            "plan_parseable_seconds": priority.get("plan_parseable_seconds"),
-            "first_agent_seconds": priority.get("first_agent_seconds"),
-            "first3_agent_seconds": priority.get("first3_agent_seconds"),
-            "all_final_agent_seconds": priority.get("all_final_agent_seconds"),
-            "final_agent_sequence": priority.get("final_agent_sequence"),
-            "first3_tuple": priority.get("first3_tuple"),
-            "plan_effective_tokens": priority.get("plan_effective_tokens"),
-            "plan_capacity": priority.get("plan_capacity"),
-            "unused_plan_capacity": priority.get("unused_plan_capacity"),
-            "plan_capacity_utilization": priority.get("plan_capacity_utilization"),
-            "plan_json_complete": priority.get("plan_json_complete"),
-            "plan_json_complete_seconds": priority.get(
-                "plan_json_complete_seconds"
-            ),
-            "plan_capacity_overflow": priority.get("plan_capacity_overflow"),
-            "plan_tokens_after_json_before_detection": priority.get(
-                "plan_tokens_after_json_before_detection"
-            ),
-            "reasoning_effective_tokens": priority.get("reasoning_effective_tokens"),
         }
-
         with self._lock:
             previous = self._records.get(request_key)
             if previous is None:
@@ -314,23 +249,12 @@ class AgentTimingRecorder:
                 record["first_created_unix"] = int(created_unix)
             else:
                 record["request_index"] = previous["request_index"]
-                record["attempt_count"] = max(
-                    1, int(previous.get("attempt_count") or 1)
-                ) + 1
+                record["attempt_count"] = int(previous.get("attempt_count") or 1) + 1
                 record["first_created_unix"] = previous.get(
-                    "first_created_unix", previous.get("created_unix")
-                )
+                    "first_created_unix", previous.get("created_unix"))
             self._records[request_key] = record
             self._atomic_write_log(list(self._records.values()))
-
         LOGGER.info(
-            "agent_timing_saved request=%s attempt=%s updated=%s "
-            "decisions=%d confirmations=%d all_decided_seconds=%s",
-            record["request_index"],
-            record["attempt_count"],
-            previous is not None,
-            len(decisions),
-            len(confirmations),
-            all_decided,
-        )
+            "agent_timing_saved request=%s method=%s predictions=%d natural=%d",
+            record["request_index"], method, len(predicted), len(natural))
         return record

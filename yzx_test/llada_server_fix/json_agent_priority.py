@@ -61,6 +61,10 @@ class JsonAgentPriorityConfig:
     confirm_stable_steps: int = 2
     discovery_steps: int = 4
     min_anchor_gap: int = 12
+    # Permit the commit/shadow gate to use a stable logits-localized anchor
+    # before every anchor token exists in ``x``. Keeping this opt-in preserves
+    # the legacy observe/priority behavior.
+    allow_speculative_anchor_commit: bool = False
     # Periodic cross-block probing experiment.  None keeps the legacy priority
     # behavior with speculative Agent-name writes.  Any explicit value
     # (including 0 = block-start observations only) switches the controller to
@@ -113,6 +117,30 @@ class JsonAgentSlotRuntime:
     # is the first time the Agent value appears naturally in the response.
     predicted_seconds: Optional[float] = None
     predicted_step: Optional[int] = None
+    predicted_candidate: Optional[str] = None
+    # ``shadow_*`` records the exact instant at which the writable speculative
+    # gate would have fired, without requiring that a write actually occurs.
+    shadow_seconds: Optional[float] = None
+    shadow_step: Optional[int] = None
+    shadow_candidate: Optional[str] = None
+    shadow_anchor_offset: Optional[int] = None
+    shadow_anchor_observed_ratio: Optional[float] = None
+    shadow_anchor_consistent_steps: Optional[int] = None
+    shadow_probability: Optional[float] = None
+    shadow_margin: Optional[float] = None
+    committed_seconds: Optional[float] = None
+    committed_step: Optional[int] = None
+    committed_candidate: Optional[str] = None
+    committed_anchor_offset: Optional[int] = None
+    commit_anchor_observed_ratio: Optional[float] = None
+    commit_anchor_consistent_steps: Optional[int] = None
+    commit_probability: Optional[float] = None
+    commit_margin: Optional[float] = None
+    commit_had_mask: Optional[bool] = None
+    committed_token_count: Optional[int] = None
+    final_anchor_match: Optional[bool] = None
+    final_agent_candidate: Optional[str] = None
+    final_agent_match: Optional[bool] = None
     materialized_seconds: Optional[float] = None
     materialized_step: Optional[int] = None
     materialized_candidate: Optional[str] = None
@@ -212,6 +240,43 @@ class JsonAgentFieldController:
         self._catalog_target_ids: Optional[torch.Tensor] = None
         self._catalog_positions: Optional[torch.Tensor] = None
         self._anchor_target_tensors: Tuple[torch.Tensor, ...] = ()
+        # Optional read-only localization bound.  Fixed-canvas PLAN-first uses
+        # this to search only its known PLAN capacity; ordinary Dual Vanilla
+        # leaves it unset and searches the complete generation canvas.
+        self._search_start: Optional[int] = None
+        self._search_end: Optional[int] = None
+
+    def set_search_region(
+        self, start: Optional[int], end: Optional[int]
+    ) -> None:
+        if (start is None) != (end is None):
+            raise ValueError("Agent search region requires both start and end.")
+        if start is not None and int(start) >= int(end):
+            raise ValueError("Agent search region must be non-empty.")
+        self._search_start = None if start is None else int(start)
+        self._search_end = None if end is None else int(end)
+
+    def shift_positions(self, start: int, delta: int) -> None:
+        """Shift tracked absolute positions after a canvas compaction.
+
+        Fixed-canvas reasoning compaction moves the entire PLAN region. Any
+        speculative anchors and frozen Agent spans found before that movement
+        must follow their tokens to the new absolute coordinates.
+        """
+
+        start = int(start)
+        delta = int(delta)
+        if delta == 0:
+            return
+        for runtime in self.slots:
+            if runtime.anchor_start is not None and runtime.anchor_start >= start:
+                runtime.anchor_start += delta
+            if runtime.name_start is not None and runtime.name_start >= start:
+                runtime.name_start += delta
+        if self._search_start is not None and self._search_start >= start:
+            self._search_start += delta
+        if self._search_end is not None and self._search_end >= start:
+            self._search_end += delta
 
     def _encode(self, text: str) -> List[int]:
         return list(self.tokenizer.encode(text, add_special_tokens=False))
@@ -264,7 +329,12 @@ class JsonAgentFieldController:
         sequence_max = sequence_logits.amax(dim=-1)
         absolute_end = logits_start + sequence_logits.shape[0]
         generation_start = self.prompt_length
-        generation_end = self.prompt_length + self.gen_length
+        generation_end = min(
+            x.shape[1], self.prompt_length + self.gen_length
+        )
+        if self._search_start is not None:
+            generation_start = max(generation_start, self._search_start)
+            generation_end = min(generation_end, self._search_end)
         candidates: Dict[int, Tuple[int, Tuple[int, ...], float, float]] = {}
 
         for pattern in self.anchor_variants:
@@ -402,7 +472,11 @@ class JsonAgentFieldController:
                 # all-mask pass hallucinated more plan objects than the normal
                 # response contains. Drop stale, unmaterialized slots instead
                 # of reporting phantom Agent calls.
-                if not runtime.confirmed and not runtime.field_written:
+                if (
+                    not runtime.confirmed
+                    and not runtime.field_written
+                    and runtime.shadow_seconds is None
+                ):
                     self.slots[slot_index] = JsonAgentSlotRuntime()
                 continue
             anchor_start, pattern, score, observed_ratio = candidates[slot_index]
@@ -413,7 +487,11 @@ class JsonAgentFieldController:
                 continue
             # A field is written only after its anchor occurs naturally in x.
             # Once written, never erase or relocate that normal response text.
-            if runtime.confirmed or runtime.field_written:
+            if (
+                runtime.confirmed
+                or runtime.field_written
+                or runtime.shadow_seconds is not None
+            ):
                 continue
             runtime.anchor_start = anchor_start
             runtime.anchor_token_ids = pattern
@@ -437,6 +515,28 @@ class JsonAgentFieldController:
             runtime.confirmed_step = None
             runtime.predicted_seconds = None
             runtime.predicted_step = None
+            runtime.predicted_candidate = None
+            runtime.shadow_seconds = None
+            runtime.shadow_step = None
+            runtime.shadow_candidate = None
+            runtime.shadow_anchor_offset = None
+            runtime.shadow_anchor_observed_ratio = None
+            runtime.shadow_anchor_consistent_steps = None
+            runtime.shadow_probability = None
+            runtime.shadow_margin = None
+            runtime.committed_seconds = None
+            runtime.committed_step = None
+            runtime.committed_candidate = None
+            runtime.committed_anchor_offset = None
+            runtime.commit_anchor_observed_ratio = None
+            runtime.commit_anchor_consistent_steps = None
+            runtime.commit_probability = None
+            runtime.commit_margin = None
+            runtime.commit_had_mask = None
+            runtime.committed_token_count = None
+            runtime.final_anchor_match = None
+            runtime.final_agent_candidate = None
+            runtime.final_agent_match = None
             runtime.materialized_seconds = None
             runtime.materialized_step = None
             runtime.materialized_candidate = None
@@ -550,19 +650,50 @@ class JsonAgentFieldController:
         x: torch.Tensor,
         runtime: JsonAgentSlotRuntime,
         candidate: str,
-    ) -> None:
-        if runtime.anchor_start is None or runtime.name_start is None:
-            return
-        # Never synthesize an anchor: doing that makes the next observation
-        # treat controller-written text as model evidence and can duplicate or
-        # truncate plan objects.  This method is called only for an anchor that
-        # is already fully present in x.
-        value = torch.tensor(
-            self.padded_catalog_ids[candidate], device=x.device, dtype=x.dtype
-        )
-        x[:, runtime.name_start:runtime.name_start + self.value_width] = value
-        x[:, runtime.name_start + self.value_width] = self.comma_token_id
+        global_step: int,
+    ) -> bool:
+        if (
+            runtime.field_written
+            or runtime.anchor_start is None
+            or runtime.name_start is None
+        ):
+            return False
+        value_ids = self.catalog_value_ids[candidate]
+        name_end = runtime.name_start + len(value_ids)
+        if name_end > x.shape[1]:
+            return False
+        # A commit is useful only while the target Agent value still contains
+        # at least one MASK.  This also prevents a late observation from being
+        # mislabeled as an early commit after natural materialization.
+        had_mask = bool((x[:, runtime.name_start:name_end] == self.mask_id).any())
+        if not had_mask:
+            return False
+        value = torch.tensor(value_ids, device=x.device, dtype=x.dtype)
+        x[:, runtime.name_start:name_end] = value
         runtime.field_written = True
+        now = self._elapsed()
+        runtime.committed_seconds = now
+        runtime.committed_step = global_step
+        runtime.committed_candidate = candidate
+        anchor_origin = (
+            self._search_start
+            if self._search_start is not None
+            else self.prompt_length
+        )
+        runtime.committed_anchor_offset = runtime.anchor_start - anchor_origin
+        runtime.commit_anchor_observed_ratio = runtime.anchor_observed_ratio
+        runtime.commit_anchor_consistent_steps = runtime.anchor_consistent_steps
+        runtime.commit_probability = runtime.candidate_probability
+        runtime.commit_margin = runtime.candidate_margin
+        runtime.commit_had_mask = had_mask
+        runtime.committed_token_count = len(value_ids)
+        # A successful commit is immediately materialized in the actual
+        # generation canvas.  Freeze it through decoder_mask and retain this
+        # exact timestamp rather than waiting for the next observation.
+        runtime.materialized_seconds = now
+        runtime.materialized_step = global_step
+        runtime.materialized_candidate = candidate
+        return True
 
     def _update_slot(
         self,
@@ -615,15 +746,56 @@ class JsonAgentFieldController:
             if not from_natural and runtime.predicted_seconds is None:
                 runtime.predicted_seconds = now
                 runtime.predicted_step = global_step
-            # A speculative recognition can be surfaced for prefetch, but it
-            # must not mutate the response until the JSON anchor was naturally
-            # decoded by the model.
+                runtime.predicted_candidate = candidate
+            if self.config.allow_speculative_anchor_commit:
+                commit_anchor_ready = (
+                    runtime.anchor_consistent_steps
+                    >= self.config.anchor_stable_steps
+                )
+            else:
+                commit_anchor_ready = runtime.anchor_observed_ratio == 1.0
+            candidate_width = len(self.catalog_value_ids[candidate])
+            name_end = (
+                runtime.name_start + candidate_width
+                if runtime.name_start is not None else None
+            )
+            name_has_mask = bool(
+                name_end is not None
+                and name_end < x.shape[1]
+                and (x[:, runtime.name_start:name_end] == self.mask_id).any()
+            )
+            would_commit = (
+                slot_index < self.config.priority_slots
+                and commit_anchor_ready
+                and candidate == runtime.recognized_candidate
+                and name_has_mask
+            )
+            if would_commit and runtime.shadow_seconds is None:
+                anchor_origin = (
+                    self._search_start
+                    if self._search_start is not None
+                    else self.prompt_length
+                )
+                runtime.shadow_seconds = now
+                runtime.shadow_step = global_step
+                runtime.shadow_candidate = candidate
+                runtime.shadow_anchor_offset = runtime.anchor_start - anchor_origin
+                runtime.shadow_anchor_observed_ratio = runtime.anchor_observed_ratio
+                runtime.shadow_anchor_consistent_steps = (
+                    runtime.anchor_consistent_steps
+                )
+                runtime.shadow_probability = probability
+                runtime.shadow_margin = margin
             if (
                 allow_write
-                and runtime.anchor_observed_ratio == 1.0
-                and candidate == runtime.recognized_candidate
+                and would_commit
             ):
-                self._write_candidate(x, runtime, runtime.recognized_candidate)
+                self._write_candidate(
+                    x,
+                    runtime,
+                    runtime.recognized_candidate,
+                    global_step,
+                )
 
         confirm = (
             reliable
@@ -694,12 +866,29 @@ class JsonAgentFieldController:
     ) -> None:
         """Shared read-only observation body used by observe() and probes."""
 
-        covers_full_sequence = (
-            logits_start <= self.prompt_length
-            and logits_start + logits.shape[1]
-            >= self.prompt_length + self.gen_length
+        # Anchor localization only needs logits that cover the region being
+        # searched.  In ordinary Dual Vanilla that region is the complete
+        # current generation canvas.  A fixed canvas can be shorter than the
+        # configured maximum ``gen_length`` (and can shrink again after
+        # compaction), so comparing against ``prompt_length + gen_length``
+        # incorrectly rejects its existing full warmup logits.  Conversely,
+        # block-local logits must not trigger a region-wide anchor rescan.
+        search_start = (
+            self.prompt_length
+            if self._search_start is None
+            else max(self.prompt_length, self._search_start)
         )
-        if covers_full_sequence:
+        search_end = min(
+            x.shape[1],
+            self.prompt_length + self.gen_length,
+            self._search_end if self._search_end is not None else x.shape[1],
+        )
+        covers_search_region = (
+            search_start < search_end
+            and logits_start <= search_start
+            and logits_start + logits.shape[1] >= search_end
+        )
+        if covers_search_region:
             self._full_sequence_observations += 1
             candidates = self._anchor_candidates(logits, x, logits_start)
             self._assign_anchors(x, candidates)
@@ -784,13 +973,39 @@ class JsonAgentFieldController:
         for runtime in self.slots:
             if runtime.name_start is None or not runtime.field_written:
                 continue
-            start = runtime.anchor_start
-            end = runtime.name_start + self.value_width + 1
+            # A speculative anchor may still contain MASK tokens. Freeze only
+            # the exact committed Agent value (including its closing quote).
+            # Padding to catalog max width or writing the following comma can
+            # overwrite a naturally shorter layout's next JSON key.
+            start = runtime.name_start
+            width = runtime.committed_token_count
+            if width is None:
+                width = len(self.catalog_value_ids[runtime.committed_candidate])
+            end = runtime.name_start + width
             overlap_start = max(start, mask_start)
             overlap_end = min(end, mask_end)
             if overlap_start < overlap_end:
                 result[:, overlap_start - mask_start:overlap_end - mask_start] = False
         return result
+
+    def step_callback(self, nfe, num_block, block_step, x) -> None:
+        """Timestamp natural materialization after an unchanged transfer.
+
+        This callback reads ``x`` only.  It is used by the observe-only
+        ablation so materialization timing is not delayed until the next block
+        warmup, while logits-based recognition still comes exclusively from
+        the warmup logits.
+        """
+
+        del num_block, block_step
+        now = self._elapsed()
+        for runtime in self.slots:
+            observed_name = self._observed_catalog_value(x, runtime)
+            if observed_name is None or runtime.materialized_seconds is not None:
+                continue
+            runtime.materialized_seconds = now
+            runtime.materialized_step = int(nfe)
+            runtime.materialized_candidate = observed_name
 
     def has_unconfirmed_agents(self) -> bool:
         # Agent discovery must not extend a block's normal denoising loop.  The
@@ -806,6 +1021,9 @@ class JsonAgentFieldController:
         generation_end = min(
             x.shape[1], self.prompt_length + self.gen_length
         )
+        if self._search_start is not None:
+            generation_start = max(generation_start, self._search_start)
+            generation_end = min(generation_end, self._search_end)
         sequence = x[0, generation_start:generation_end]
         candidates: Dict[int, Tuple[int, Tuple[int, ...], float, float]] = {}
         for pattern, target in zip(
@@ -843,7 +1061,30 @@ class JsonAgentFieldController:
         # no subsequent full-sequence warm-up exists. Exact natural JSON is
         # definitive evidence, so this records an end-of-generation upper bound
         # without writing or otherwise changing the response canvas.
-        self._assign_anchors(x, self._materialized_anchor_candidates(x))
+        final_anchors = self._materialized_anchor_candidates(x)
+        # Evaluate speculative writes against structure that really exists in
+        # the final canvas.  Matching by value start handles equivalent anchor
+        # whitespace variants while rejecting a hallucinated anchor position.
+        final_values = {}
+        for anchor_start, pattern, _score, _ratio in final_anchors:
+            name_start = anchor_start + len(pattern)
+            probe = JsonAgentSlotRuntime(
+                anchor_start=anchor_start,
+                anchor_token_ids=pattern,
+                name_start=name_start,
+            )
+            final_values[name_start] = self._observed_catalog_value(x, probe)
+        for runtime in self.slots:
+            if runtime.committed_seconds is None:
+                continue
+            runtime.final_anchor_match = runtime.name_start in final_values
+            runtime.final_agent_candidate = final_values.get(runtime.name_start)
+            runtime.final_agent_match = bool(
+                runtime.final_anchor_match
+                and runtime.final_agent_candidate == runtime.committed_candidate
+            )
+
+        self._assign_anchors(x, final_anchors)
         self._scan_plan_complete(x, self._observed_steps)
         now = self._elapsed()
         final_step = self._observed_steps
@@ -899,6 +1140,62 @@ class JsonAgentFieldController:
                     "confirmed_step": runtime.confirmed_step,
                     "predicted_seconds": runtime.predicted_seconds,
                     "predicted_step": runtime.predicted_step,
+                    "predicted_agent": runtime.predicted_candidate,
+                    "shadow_seconds": runtime.shadow_seconds,
+                    "shadow_step": runtime.shadow_step,
+                    "shadow_agent": runtime.shadow_candidate,
+                    "shadow_anchor_offset": runtime.shadow_anchor_offset,
+                    "shadow_anchor_observed_ratio": (
+                        runtime.shadow_anchor_observed_ratio
+                    ),
+                    "shadow_anchor_consistent_steps": (
+                        runtime.shadow_anchor_consistent_steps
+                    ),
+                    "shadow_probability": runtime.shadow_probability,
+                    "shadow_margin": runtime.shadow_margin,
+                    "committed_seconds": runtime.committed_seconds,
+                    "committed_step": runtime.committed_step,
+                    "committed_agent": runtime.committed_candidate,
+                    "committed_anchor_offset": runtime.committed_anchor_offset,
+                    "commit_anchor_observed_ratio": runtime.commit_anchor_observed_ratio,
+                    "commit_anchor_consistent_steps": runtime.commit_anchor_consistent_steps,
+                    "commit_probability": runtime.commit_probability,
+                    "commit_margin": runtime.commit_margin,
+                    "commit_had_mask": runtime.commit_had_mask,
+                    "committed_token_count": runtime.committed_token_count,
+                    "final_anchor_match": runtime.final_anchor_match,
+                    "wrong_anchor": (
+                        not runtime.final_anchor_match
+                        if runtime.committed_seconds is not None
+                        and runtime.final_anchor_match is not None
+                        else None
+                    ),
+                    "final_agent": runtime.final_agent_candidate,
+                    "final_agent_match": runtime.final_agent_match,
+                    "commit_correct": (
+                        runtime.final_agent_match
+                        if runtime.committed_seconds is not None
+                        and runtime.final_agent_match is not None
+                        else (
+                            runtime.committed_candidate
+                            == runtime.materialized_candidate
+                            if runtime.committed_seconds is not None
+                            and runtime.materialized_candidate is not None
+                            else None
+                        )
+                    ),
+                    "wrong_commit": (
+                        not runtime.final_agent_match
+                        if runtime.committed_seconds is not None
+                        and runtime.final_agent_match is not None
+                        else None
+                    ),
+                    "commit_lead_vs_materialization": (
+                        runtime.materialized_seconds - runtime.committed_seconds
+                        if runtime.committed_seconds is not None
+                        and runtime.materialized_seconds is not None
+                        else None
+                    ),
                     "materialized_seconds": runtime.materialized_seconds,
                     "materialized_step": runtime.materialized_step,
                     "materialized_candidate": runtime.materialized_candidate,
@@ -925,6 +1222,74 @@ class JsonAgentFieldController:
         priority_recognized = sum(
             slot["recognized_seconds"] is not None for slot in priority
         )
+        priority_predicted = [
+            slot["predicted_seconds"] for slot in priority
+            if slot["predicted_seconds"] is not None
+        ]
+        priority_predicted_steps = [
+            slot["predicted_step"] for slot in priority
+            if slot["predicted_step"] is not None
+        ]
+        priority_materialized = [
+            slot["materialized_seconds"] for slot in priority
+            if slot["materialized_seconds"] is not None
+        ]
+        priority_materialized_steps = [
+            slot["materialized_step"] for slot in priority
+            if slot["materialized_step"] is not None
+        ]
+        priority_committed = [
+            slot["committed_seconds"] for slot in priority
+            if slot["committed_seconds"] is not None
+        ]
+        priority_committed_steps = [
+            slot["committed_step"] for slot in priority
+            if slot["committed_step"] is not None
+        ]
+        priority_shadow = [
+            slot["shadow_seconds"] for slot in priority
+            if slot["shadow_seconds"] is not None
+        ]
+        priority_shadow_steps = [
+            slot["shadow_step"] for slot in priority
+            if slot["shadow_step"] is not None
+        ]
+        committed_slots = [
+            slot for slot in slots if slot.get("committed_seconds") is not None
+        ]
+        evaluated_commits = [
+            slot for slot in committed_slots
+            if slot.get("commit_correct") is not None
+        ]
+        correct_commits = sum(
+            bool(slot.get("commit_correct"))
+            for slot in evaluated_commits
+        )
+        wrong_anchors = sum(
+            bool(slot.get("wrong_anchor")) for slot in evaluated_commits
+        )
+        final_agent_matches = sum(
+            bool(slot.get("final_agent_match")) for slot in evaluated_commits
+        )
+        first3_recognized_seconds = (
+            max(priority_predicted)
+            if len(priority) == self.config.priority_slots
+            and len(priority_predicted) == len(priority)
+            else None
+        )
+        first3_materialized_seconds = (
+            max(priority_materialized)
+            if len(priority) == self.config.priority_slots
+            and len(priority_materialized) == len(priority)
+            else None
+        )
+        prediction_complete = (
+            len(priority) == self.config.priority_slots
+            and len(priority_predicted) == len(priority)
+        )
+        final_known = prediction_complete and all(
+            slot.get("materialized_candidate") is not None for slot in priority
+        )
         return {
             "priority_slots": self.config.priority_slots,
             "tracking_slots": self.tracking_slots,
@@ -948,6 +1313,97 @@ class JsonAgentFieldController:
             # partial timestamp separately so failed runs remain diagnosable.
             "all_recognized_seconds": (
                 max(recognized) if all_recognized else None
+            ),
+            "first3_recognized_seconds": first3_recognized_seconds,
+            "first3_recognized_step": (
+                max(priority_predicted_steps)
+                if prediction_complete
+                and len(priority_predicted_steps) == len(priority)
+                else None
+            ),
+            "first3_recognized_exact": (
+                all(
+                    slot.get("predicted_agent")
+                    == slot.get("materialized_candidate")
+                    for slot in priority
+                )
+                if final_known else None
+            ),
+            "first3_materialized_seconds": first3_materialized_seconds,
+            "first3_materialized_step": (
+                max(priority_materialized_steps)
+                if len(priority) == self.config.priority_slots
+                and len(priority_materialized_steps) == len(priority)
+                else None
+            ),
+            "first3_agent_seconds": first3_materialized_seconds,
+            "first3_shadow_seconds": (
+                max(priority_shadow)
+                if len(priority) == self.config.priority_slots
+                and len(priority_shadow) == len(priority)
+                else None
+            ),
+            "first3_shadow_step": (
+                max(priority_shadow_steps)
+                if len(priority) == self.config.priority_slots
+                and len(priority_shadow_steps) == len(priority)
+                else None
+            ),
+            "shadow_count": len([
+                slot for slot in slots if slot.get("shadow_seconds") is not None
+            ]),
+            "shadow_coverage": (
+                len(priority_shadow) / len(priority) if priority else 0.0
+            ),
+            "first3_commit_seconds": (
+                max(priority_committed)
+                if len(priority) == self.config.priority_slots
+                and len(priority_committed) == len(priority)
+                else None
+            ),
+            "first3_commit_step": (
+                max(priority_committed_steps)
+                if len(priority) == self.config.priority_slots
+                and len(priority_committed_steps) == len(priority)
+                else None
+            ),
+            "first3_commit_correct": (
+                all(
+                    bool(slot.get("commit_correct"))
+                    for slot in priority
+                )
+                if len(priority) == self.config.priority_slots
+                and len(priority_committed) == len(priority)
+                and all(
+                    slot.get("materialized_candidate") is not None
+                    for slot in priority
+                )
+                else None
+            ),
+            "commit_count": len(committed_slots),
+            "commit_coverage": (
+                len(priority_committed) / len(priority) if priority else 0.0
+            ),
+            "commit_evaluated_count": len(evaluated_commits),
+            "commit_correct_count": correct_commits,
+            "wrong_commit_count": len(evaluated_commits) - correct_commits,
+            "wrong_anchor_count": wrong_anchors,
+            "wrong_anchor_rate": (
+                wrong_anchors / len(evaluated_commits)
+                if evaluated_commits else None
+            ),
+            "final_agent_match_count": final_agent_matches,
+            "final_agent_match_rate": (
+                final_agent_matches / len(evaluated_commits)
+                if evaluated_commits else None
+            ),
+            "commit_accuracy": (
+                correct_commits / len(evaluated_commits)
+                if evaluated_commits else None
+            ),
+            "wrong_commit_rate": (
+                1.0 - correct_commits / len(evaluated_commits)
+                if evaluated_commits else None
             ),
             "latest_partial_recognized_seconds": (
                 max(recognized) if recognized else None

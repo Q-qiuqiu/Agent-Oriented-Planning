@@ -551,6 +551,7 @@ def generate_with_fixed_canvas_dual_cache(
             allowed_full = (x == mask_id) & region_mask
             allowed_full[:, :block_start] = False
             allowed_full[:, block_end:] = False
+            allowed_full = agent_controller.decoder_mask(allowed_full)
             initial_masks = int(allowed_full.sum().item())
             if initial_masks == 0:
                 schedule_log.append({
@@ -572,6 +573,23 @@ def generate_with_fixed_canvas_dual_cache(
             out_full = model(x, use_cache=True)
             past_key_values = out_full.past_key_values
             nfe += 1
+            if getattr(agent_controller, "observes_plan_warmups", False) and phase == "plan":
+                agent_controller.observe_plan_logits(
+                    out_full.logits,
+                    x,
+                    logits_start=0,
+                    global_step=global_step,
+                )
+                # During reasoning, ordinary transfer remains reasoning-only;
+                # the controller may nevertheless commit exact Agent-value
+                # tokens in the known future PLAN region. Rebuild the active
+                # phase mask so committed spans stay frozen without opening
+                # any other PLAN position to transfer.
+                region_mask = layout.bool_mask(x, phase)
+                allowed_full = (x == mask_id) & region_mask
+                allowed_full[:, :block_start] = False
+                allowed_full[:, block_end:] = False
+                allowed_full = agent_controller.decoder_mask(allowed_full)
             replace_position = torch.zeros_like(x, dtype=torch.bool)
             replace_position[:, block_start:block_end] = True
 
@@ -623,6 +641,24 @@ def generate_with_fixed_canvas_dual_cache(
                     replace_position=replace_position,
                 ).logits
                 nfe += 1
+                if (
+                    phase == "plan"
+                    and getattr(agent_controller, "agent_commit", False)
+                ):
+                    agent_controller.observe_plan_logits(
+                        logits_block,
+                        x,
+                        logits_start=block_start,
+                        global_step=global_step,
+                    )
+                    region_mask = layout.bool_mask(x, phase)
+                    allowed_block = (
+                        (x[:, block_start:block_end] == mask_id)
+                        & region_mask[:, block_start:block_end]
+                    )
+                    allowed_block = agent_controller.decoder_mask(
+                        allowed_block, mask_start=block_start
+                    )
                 quota = None if threshold is not None else quotas[:, local_step]
                 x0_block, transfer_block = get_transfer_index(
                     logits_block,

@@ -1,106 +1,50 @@
-# LLaDA Server
+# Final LLaDA Agent-prefetch server
 
-This directory is the AOP-owned copy of the Fast-dLLM v1 LLaDA runtime. Make
-future server changes here so the benchmark clients and planner server remain
-in the same repository.
+This directory exposes one server with four methods:
 
-## Entrypoints
+| Method | Decoding | Agent prediction |
+|---|---|---|
+| `base` | Original Dual Vanilla | None; natural Agent timing only |
+| `commit` | Original Dual Vanilla | Read-only Global + Local + Natural fusion |
+| `plan` | Fixed Canvas, PLAN-first, Dynamic END | None; natural timing only |
+| `all` | Fixed Canvas, PLAN-first, Dynamic END | Read-only PLAN-region prediction |
 
-- `fastdllm_server.py`: original baseline OpenAI-compatible LLaDA server.
-- `base_llada_server.py`: separately instrumented baseline server. It passively
-  monitors naturally materialized JSON `agent` fields for timing, but never
-  changes logits, masks, tokens, decoding order, or the returned response.
-- `llada_server.py`: planner server with Agent-name priority decoding, timing
-  records, prompt policy handling, and conservative plan JSON repair.
+No observer changes `x`, decoder masks, transfer order, block order, or NFE.
+`plan` and `all` intentionally use PLAN-first decoding; `base` and `commit`
+share the original Dual Vanilla trajectory.
 
-The planner server extracts the active Agent registry from lines formatted as
-`- name_agent: description` in the request system prompt. Its 13-name global
-catalog is used only to repair close spelling errors; the repaired role must
-still belong to the current request registry.
-
-## Layout
-
-- `generate.py`: masked-diffusion decoding and cache implementations.
-- `model/`: local LLaDA Transformers model definition.
-- `agent_priority.py`, `json_agent_priority.py`: early Agent recognition and
-  priority decoding.
-- `response_agent_timing.py`: read-only controller used by the baseline server
-  to observe Agent-name materialization during diffusion.
-- `agent_timing.py`: per-request Agent timing persistence.
-- `planner_policy.py`: planner output-order policies.
-- `planner_json_repair.py`: conservative syntax and Agent-name repair.
-- `tests/`: focused tests for the copied runtime modules.
-
-Runtime JSONL logs, model weights, caches, and generated outputs are not kept
-in this directory.
-
-## Launch
-
-The original baseline servers configured by the benchmark launcher can be
-started with:
+## Start one server
 
 ```bash
-bash yzx_test/start_vllm.sh llada4 0
-```
-
-Run the monitored baseline directly with the same environment variables used
-by `fastdllm_server.py`:
-
-```bash
-FASTDLLM_MODEL_PATH=/data/labshare/Param/llada \
-FASTDLLM_SERVED_MODEL_NAME=/data/labshare/Param/llada \
-FASTDLLM_PORT=7004 \
-python yzx_test/llada_server/base_llada_server.py \
-  --gen-length 1024 \
-  --block-size 32 \
-  --cache-mode dual \
-  --threshold 0.9 \
-  --steps 1024 \
-  --agent-slots 3 \
-  --agent-timing-slots 3
-```
-
-Agent timing is enabled by default in `base_llada_server.py`. It reads the
-active Agent registry from the system prompt, identifies HuskyQA, IIRC, MMLU,
-or ChronoQA, and writes the matching log under
-`yzx_test/benchmarks/fastdllm_log/`:
-
-```text
-base_huskyqa_full_timings.jsonl
-base_iirc_full_timings.jsonl
-base_mmlu_full_timings.jsonl
-base_chronoqa_full_timings.jsonl
-```
-
-Each record contains total `generation_seconds` and one entry per observed
-Agent occurrence, including `first_observed_seconds`, `decision_seconds`, and
-the diffusion step. These are real observation times from the generation loop,
-not estimates based on the final token positions. Only JSON `agent` fields
-between `PLAN_JSON` and `END_PLAN_JSON` are counted; Agent names mentioned in
-planning reasoning are ignored. Monitoring overhead is part of
-`generation_seconds` and is marked by
-`monitor_overhead_included: true`. Disable it for an uninstrumented baseline:
-
-```bash
-python yzx_test/llada_server/base_llada_server.py --no-record-agent-timings
-```
-
-Run the Agent-aware planner server directly when early Agent recognition is
-required:
-
-```bash
-python llada_server/llada_server.py \
+cd /data/home/yzx/Agent-Oriented-Planning/yzx_test/llada_server_fix
+CUDA_VISIBLE_DEVICES=0 /home/yzx/miniconda3/envs/llada/bin/python llada_server.py \
+  --method commit \
   --model_path /data/labshare/Param/llada \
   --served_model_name /data/labshare/Param/llada \
-  --port 7004 \
-  --max_gen_length 1024 \
-  --block_size 32 \
-  --steps_per_block 32 \
-  --cache_mode dual \
-  --agent_slots 3 \
-  --agent_timing_slots 3 \
-  --policy reasonplan
+  --device cuda --host 127.0.0.1 --port 7390 \
+  --cache_mode dual --block_size 32 --max_gen_length 1024 \
+  --steps_per_block 32 --threshold 0.9 --policy reasonplan \
+  --agent_timing_slots 16 \
+  --agent_timing_log_path /tmp/commit_timings.jsonl
 ```
 
-The code was copied from `/data/home/yzx/Fast-dLLM/v1/llada`. The upstream
-license is retained as `LICENSE.fast-dllm`.
+Replace `commit` with `base`, `plan`, or `all`.
+
+## Compact timing log
+
+Each JSONL record contains only request identity/status plus:
+
+- `predicted_agents`: predicted Agent name, source, and prediction time;
+- `natural_agents`: naturally decoded Agent name and decode time;
+- `first3_prediction_seconds`, `first3_natural_seconds`;
+- `all_natural_seconds`;
+- `generation_seconds` and `nfe`.
+
+## Parallel benchmark runner
+
+```bash
+GPU_A=2 GPU_B=3 METHODS="base commit plan all" \
+  bash yzx_test/llada_server_fix/run_methods_parallel.sh final_01 5
+```
+
+Results are written under `yzx_test/benchmarks/final_methods/final_01/`.

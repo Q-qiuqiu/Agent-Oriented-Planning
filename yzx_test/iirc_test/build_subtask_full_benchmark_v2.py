@@ -92,12 +92,12 @@ END_PLAN_JSON
 
 CONFIG = {
     "input": "benchmarks/iirc/iirc_dev_flat.json",
-    "plans_output": "benchmarks/iirc/iirc_plans_base_llama3.json",
-    "benchmark_output": "benchmarks/iirc/iirc_subtask_base_llama3.json",
-    "planner_api_url": "http://10.137.144.97:7005/v1",
+    "plans_output": "benchmarks/iirc/iirc_plans_base_lladav1.json",
+    "benchmark_output": "benchmarks/iirc/iirc_subtask_base_lladav1.json",
+    "planner_api_url": "http://10.137.144.97:7006/v1",
     "planner_api_key": "empty",
-    #"planner_model": "/data/labshare/Param/llada",
-    "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
+    "planner_model": "/data/labshare/Param/llada",
+    #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_temperature": 0.0,
     "planner_max_tokens": 1024,
     "timeout": 600,

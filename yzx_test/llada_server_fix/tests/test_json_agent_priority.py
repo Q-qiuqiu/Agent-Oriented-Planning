@@ -83,6 +83,49 @@ def test_candidate_only_scoring_matches_full_vocabulary_log_softmax():
     torch.testing.assert_close(torch.tensor(list(actual.values())), expected)
 
 
+def test_fixed_search_region_accepts_current_canvas_and_rejects_local_logits(
+    monkeypatch,
+):
+    tokenizer = CharacterTokenizer()
+    controller = JsonAgentFieldController(
+        tokenizer=tokenizer,
+        config=JsonAgentPriorityConfig(
+            catalog=["code_agent", "math_agent"],
+            priority_slots=2,
+            probe_period=0,
+        ),
+        prompt_length=8,
+        gen_length=120,
+        mask_id=tokenizer.mask_token_id,
+    )
+    # Fixed canvases reserve a maximum generation length but instantiate only
+    # the structural regions they currently need.  This canvas is therefore
+    # intentionally shorter than prompt_length + gen_length.
+    x = torch.full((1, 108), tokenizer.mask_token_id, dtype=torch.long)
+    x[:, :8] = 1
+    controller.initialize(x)
+    controller.set_search_region(40, 90)
+
+    scans = []
+
+    def record_scan(*args, **kwargs):
+        scans.append((args, kwargs))
+        return []
+
+    monkeypatch.setattr(controller, "_anchor_candidates", record_scan)
+    full_logits = torch.zeros((1, x.shape[1], 300))
+    controller.observe(full_logits, x, logits_start=0, global_step=0)
+    assert len(scans) == 1
+    assert controller._full_sequence_observations == 1
+
+    # A normal 32-token block observation intersects the PLAN region but does
+    # not cover it, so it must not rerun region-wide anchor localization.
+    local_logits = torch.zeros((1, 32, 300))
+    controller.observe(local_logits, x, logits_start=40, global_step=1)
+    assert len(scans) == 1
+    assert controller._full_sequence_observations == 1
+
+
 def test_first_four_json_agent_occurrences_are_independent_and_fifth_is_normal(
     monkeypatch,
 ):
@@ -145,6 +188,11 @@ def test_first_four_json_agent_occurrences_are_independent_and_fifth_is_normal(
     assert starts[4] not in [slot["anchor_start"] for slot in metrics["agent_slots"]]
     assert all(slot["recognized_step"] == 1 for slot in metrics["agent_slots"])
     assert all(slot["confirmed"] for slot in metrics["agent_slots"])
+    assert all(slot["committed_step"] == 1 for slot in metrics["agent_slots"])
+    assert [slot["committed_agent"] for slot in metrics["agent_slots"]] == agents[:4]
+    assert metrics["commit_count"] == 4
+    assert metrics["commit_accuracy"] == 1.0
+    assert metrics["wrong_commit_rate"] == 0.0
     assert metrics["discovered_agent_fields"] == 4
     assert metrics["recognized_agent_fields"] == 4
     assert metrics["all_priority_agents_recognized"] is True
@@ -152,7 +200,7 @@ def test_first_four_json_agent_occurrences_are_independent_and_fifth_is_normal(
 
     fragments = []
     for runtime in controller.slots:
-        end = runtime.name_start + controller.value_width + 1
+        end = runtime.name_start + runtime.committed_token_count
         fragments.append(tokenizer.decode(x[0, runtime.anchor_start:end].tolist()))
     assert fragments[0].startswith('agent":"math_agent"')
     assert fragments[1].startswith('agent":"math_agent"')
@@ -231,6 +279,146 @@ def test_dynamic_relocation_recognizes_without_writing_speculative_anchors():
     reduced = controller.metrics()
     assert reduced["discovered_agent_fields"] == 2
     assert reduced["recognized_agent_fields"] == 2
+
+
+def _speculative_commit_fixture(*, prediction_only=False, candidate="search_agent"):
+    tokenizer = CharacterTokenizer()
+    controller = JsonAgentFieldController(
+        tokenizer=tokenizer,
+        config=JsonAgentPriorityConfig(
+            catalog=["code_agent", "math_agent", "search_agent"],
+            priority_slots=1,
+            anchor_stable_steps=2,
+            tentative_probability=0.90,
+            tentative_margin=0.40,
+            allow_speculative_anchor_commit=True,
+            probe_period=0 if prediction_only else None,
+        ),
+        prompt_length=8,
+        gen_length=120,
+        mask_id=tokenizer.mask_token_id,
+    )
+    x = torch.full((1, 128), tokenizer.mask_token_id, dtype=torch.long)
+    x[:, :8] = 1
+    controller.initialize(x)
+    logits = torch.full((1, 128, 300), -20.0)
+    logits[:, :, 0] = 0.0
+    anchor = controller.anchor_variants[0]
+    start = 24
+    for offset, token_id in enumerate(anchor):
+        logits[0, start + offset, token_id] = 12.0
+    name_start = start + len(anchor)
+    for offset, token_id in enumerate(
+        controller.padded_catalog_ids[candidate]
+    ):
+        logits[0, name_start + offset, token_id] = 12.0
+    return tokenizer, controller, x, logits, anchor, start, name_start
+
+
+def test_commit_writes_only_actual_value_tokens_and_preserves_next_json_key():
+    tokenizer, controller, x, logits, _anchor, _start, name_start = (
+        _speculative_commit_fixture(candidate="code_agent")
+    )
+    actual_ids = controller.catalog_value_ids["code_agent"]
+    tail = tokenizer.encode(',"id":1')
+    tail_start = name_start + len(actual_ids)
+    x[0, tail_start : tail_start + len(tail)] = torch.tensor(tail)
+
+    controller.observe(logits, x, logits_start=0, global_step=0)
+    controller.observe(logits, x, logits_start=0, global_step=1)
+
+    slot = controller.metrics()["agent_slots"][0]
+    assert slot["committed_agent"] == "code_agent"
+    assert slot["committed_token_count"] == len(actual_ids)
+    assert torch.equal(
+        x[0, name_start : name_start + len(actual_ids)],
+        torch.tensor(actual_ids),
+    )
+    assert torch.equal(
+        x[0, tail_start : tail_start + len(tail)], torch.tensor(tail)
+    )
+    decoder_mask = controller.decoder_mask(torch.ones_like(x, dtype=torch.bool))
+    assert not bool(decoder_mask[0, name_start])
+    assert bool(decoder_mask[0, tail_start])
+
+
+def test_prediction_only_speculative_gate_records_shadow_without_writing():
+    tokenizer, controller, x, logits, anchor, start, name_start = (
+        _speculative_commit_fixture(prediction_only=True)
+    )
+    original = x.clone()
+    controller.observe(logits, x, logits_start=0, global_step=0)
+    controller.observe(logits, x, logits_start=0, global_step=1)
+    metrics = controller.metrics()
+    slot = metrics["agent_slots"][0]
+
+    assert slot["shadow_agent"] == "search_agent"
+    assert slot["shadow_step"] == 1
+    assert slot["shadow_anchor_consistent_steps"] == 2
+    assert slot["shadow_probability"] >= 0.90
+    assert slot["shadow_margin"] >= 0.40
+    assert slot["committed_agent"] is None
+    assert metrics["shadow_count"] == 1
+    assert metrics["commit_count"] == 0
+    assert torch.equal(x, original)
+    assert torch.all(controller.decoder_mask(torch.ones_like(x, dtype=torch.bool)))
+    assert torch.all(x[0, start:start + len(anchor)] == tokenizer.mask_token_id)
+    assert torch.all(x[0, name_start:] == tokenizer.mask_token_id)
+
+    # The first online trigger must remain auditable even if later anchor
+    # evidence disappears or relocates.
+    empty_logits = torch.zeros_like(logits)
+    controller.observe(empty_logits, x, logits_start=0, global_step=2)
+    retained = controller.metrics()["agent_slots"][0]
+    assert retained["shadow_agent"] == "search_agent"
+    assert retained["shadow_step"] == 1
+
+
+def test_stable_speculative_anchor_commits_value_without_freezing_anchor():
+    tokenizer, controller, x, logits, anchor, start, name_start = (
+        _speculative_commit_fixture()
+    )
+    controller.observe(logits, x, logits_start=0, global_step=0)
+    assert controller.metrics()["commit_count"] == 0
+    controller.observe(logits, x, logits_start=0, global_step=1)
+
+    slot = controller.metrics()["agent_slots"][0]
+    assert slot["committed_agent"] == "search_agent"
+    assert slot["commit_anchor_consistent_steps"] == 2
+    assert slot["commit_probability"] >= 0.90
+    assert slot["commit_margin"] >= 0.40
+    assert slot["commit_had_mask"] is True
+    assert slot["commit_anchor_observed_ratio"] < 1.0
+    assert torch.all(x[0, start:start + len(anchor)] == tokenizer.mask_token_id)
+
+    decoder_mask = controller.decoder_mask(torch.ones_like(x, dtype=torch.bool))
+    assert bool(decoder_mask[0, start]) is True
+    assert not bool(decoder_mask[0, name_start])
+
+    # Once the model later emits the predicted anchor naturally, final
+    # validation attributes this as a correct speculative commit.
+    x[0, start:start + len(anchor)] = torch.tensor(anchor)
+    controller.finalize(x)
+    slot = controller.metrics()["agent_slots"][0]
+    assert slot["wrong_anchor"] is False
+    assert slot["final_agent_match"] is True
+    assert slot["commit_correct"] is True
+
+
+def test_speculative_commit_reports_anchor_that_never_materializes():
+    _tokenizer, controller, x, logits, _anchor, _start, _name_start = (
+        _speculative_commit_fixture()
+    )
+    controller.observe(logits, x, logits_start=0, global_step=0)
+    controller.observe(logits, x, logits_start=0, global_step=1)
+    controller.finalize(x)
+    metrics = controller.metrics()
+    slot = metrics["agent_slots"][0]
+    assert slot["wrong_anchor"] is True
+    assert slot["final_agent_match"] is False
+    assert slot["wrong_commit"] is True
+    assert metrics["wrong_anchor_count"] == 1
+    assert metrics["wrong_commit_count"] == 1
 
 
 def test_materialized_anchor_and_value_survive_low_logit_topk_filter():

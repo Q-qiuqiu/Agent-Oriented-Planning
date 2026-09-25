@@ -16,7 +16,9 @@ __pycache__/
 
 # Runtime output.
 *.log
+*.pid
 *.tmp
+yzx_test/vllm_logs/
 
 # Current experiment datasets and generated benchmark artifacts. Keep the
 # directory documentation and .gitkeep files, but do not commit local data,

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG = {
     # Variants to compare, in display order. Every name must exist in
     # VARIANT_PATHS below.
-    "variants": ["full_lladav2", "base_lladav2"],
+    "variants": ["base_lladav1", "base_lladav1"],
     # Benchmarks to report, in display order.
     "benchmarks": ["chronoqa", "huskyqa", "iirc", "mmlu"],
     # Timing field to analyze: "decision_seconds" or "confirmation_seconds".

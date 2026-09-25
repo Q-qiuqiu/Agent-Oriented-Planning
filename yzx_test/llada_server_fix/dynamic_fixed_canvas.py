@@ -18,8 +18,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 
-from json_agent_priority import JsonAgentPriorityConfig
-from planner_json_repair import _validate_plan
+from json_agent_priority import JsonAgentFieldController, JsonAgentPriorityConfig
+from planner_json_repair import _plan_region, _strict_plan, _validate_plan
 from response_agent_timing import PassiveJsonAgentMonitor
 
 
@@ -197,6 +197,7 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         priority_slots: int = 3,
         tracking_slots: int = 16,
         structure_mode: str,
+        agent_commit: bool = False,
     ) -> None:
         super().__init__(
             tokenizer=tokenizer,
@@ -241,6 +242,25 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         )
         self.layout.validate()
         self.structure_mode = structure_mode
+        self.agent_commit = bool(agent_commit)
+        self.agent_observer = None
+        if self.agent_commit:
+            # ``all`` reuses normal PLAN warmups only and remains read-only.
+            self.agent_observer = JsonAgentFieldController(
+                tokenizer=tokenizer,
+                config=JsonAgentPriorityConfig(
+                    catalog=list(catalog),
+                    priority_slots=priority_slots,
+                    tracking_slots=max(priority_slots, tracking_slots),
+                    tentative_probability=0.90,
+                    tentative_margin=0.40,
+                    allow_speculative_anchor_commit=True,
+                    probe_period=0,
+                ),
+                prompt_length=prompt_length,
+                gen_length=gen_length,
+                mask_id=mask_id,
+            )
         # Leading-newline token merges differ across tokenizers, so match both
         # forms while still requiring the complete materialized marker.
         self.reasoning_end_patterns = tuple(dict.fromkeys((
@@ -280,29 +300,66 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         self._snapshots: List[Dict[str, object]] = []
         self._final_occurrences: List[Tuple[int, str]] = []
         self._final_plan = None
+        self._evaluation_plan = None
         self._last_step = 0
         self._nfe = 0
 
     def initialize(self, x: torch.Tensor) -> None:
         self.layout.initialize(x)
         super().initialize(x)
+        if self.agent_observer is not None:
+            self.agent_observer.initialize(x)
+            self.agent_observer.set_search_region(
+                self.layout.plan_start, self.layout.plan_storage_end
+            )
+        self.probe_forwards = 0
         self._fixed_reference = self.layout.fixed_ids()
         self._snapshot(x, step=0, nfe=0)
 
-    def decoder_mask(self, mask_index, mask_start=0):
-        fixed = self.layout.bool_mask(
-            torch.empty_like(mask_index, dtype=torch.long)
-            if mask_index.shape[1] == self.prompt_length + self.gen_length
-            else torch.empty(
-                (mask_index.shape[0], self.prompt_length + self.gen_length),
-                dtype=torch.long,
-                device=mask_index.device,
-            ),
-            "fixed",
+    def observe_plan_logits(
+        self,
+        logits: torch.Tensor,
+        x: torch.Tensor,
+        *,
+        logits_start: int,
+        global_step: int,
+    ) -> None:
+        """Observe or commit confidence-gated Agent values inside PLAN."""
+
+        if not self.agent_commit:
+            return
+        # Compaction can move the PLAN capacity, so refresh its exact bounds.
+        # Localization stays inside the known PLAN region. In ``all`` the
+        # nested controller is prediction-only; in fixed-PLAN ``commit`` it
+        # writes and freezes values through its normal decoder-mask path.
+        self.agent_observer.set_search_region(
+            self.layout.plan_start, self.layout.plan_storage_end
         )
-        if mask_index.shape[1] == fixed.shape[1]:
-            return mask_index & ~fixed
-        return mask_index & ~fixed[:, mask_start : mask_start + mask_index.shape[1]]
+        self.agent_observer.observe(
+            logits,
+            x,
+            logits_start=logits_start,
+            global_step=global_step,
+        )
+
+    def decoder_mask(self, mask_index, mask_start=0):
+        result = mask_index.clone()
+        mask_end = mask_start + result.shape[1]
+        for fixed_start, fixed_end in (
+            (self.layout.prefix_start, self.layout.reasoning_start),
+            (self.layout.middle_start, self.layout.plan_start),
+        ):
+            overlap_start = max(mask_start, fixed_start)
+            overlap_end = min(mask_end, fixed_end)
+            if overlap_start < overlap_end:
+                result[:, overlap_start - mask_start : overlap_end - mask_start] = False
+        if self.agent_observer is not None:
+            result = self.agent_observer.decoder_mask(result, mask_start=mask_start)
+        return result
+
+    @property
+    def observes_plan_warmups(self) -> bool:
+        return self.agent_commit
 
     def start_phase(self, phase: str) -> None:
         self.phase = phase
@@ -402,7 +459,17 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         region_start = self._phase_start(phase)
         marker_end = region_start + marker[1]
         old_storage_end = self._phase_storage_end(phase)
+        removed = old_storage_end - marker_end
         x = torch.cat([x[:, :marker_end], x[:, old_storage_end:]], dim=1)
+        if (
+            phase == "reasoning"
+            and removed > 0
+            and self.agent_observer is not None
+        ):
+            # PLAN tokens (including any speculative commits) move left with
+            # the physical compaction. Keep observer/freeze coordinates aligned
+            # without resetting their cross-warmup stability state.
+            self.agent_observer.shift_positions(old_storage_end, -removed)
         self.layout.mark_compacted(phase)
         self._fixed_reference = self.layout.fixed_ids()
         return x
@@ -517,6 +584,22 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         self._plan_payload_ids = plan_ids.detach().cpu()
         self._reasoning_payload_ids = reasoning_ids.detach().cpu()
         self._final_ids = x[0, self.prompt_length :].detach().cpu()
+        if self.agent_observer is not None:
+            # Attribute speculative writes to anchors/values that actually
+            # survived in the completed PLAN. This is evaluation-only and
+            # happens after generation has ended.
+            self.agent_observer.finalize(x)
+
+    def set_evaluation_plan_text(self, content: str) -> None:
+        """Set correctness GT from the final response returned to the client."""
+        try:
+            _start, _end, region = _plan_region(content)
+            plan = _strict_plan(region)
+            _validate_plan(plan, self.config.catalog)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            self._evaluation_plan = None
+            return
+        self._evaluation_plan = plan
 
     def metrics(self) -> Dict[str, object]:
         final = self._final_occurrences
@@ -579,7 +662,15 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
                 "confirmed": target_time is not None,
             })
         agents = [name for _, name in final]
-        return {
+        evaluation_plan = (
+            self._evaluation_plan
+            if self._evaluation_plan is not None else self._final_plan
+        )
+        parsed_agents = (
+            [str(item["agent"]) for item in evaluation_plan]
+            if evaluation_plan is not None else []
+        )
+        result = {
             "policy": self.structure_mode,
             "structure_mode": self.structure_mode,
             "timing_source": "dynamic_end_fixed_canvas_materialized_x",
@@ -592,7 +683,9 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             "first_agent_seconds": first_time,
             "first_agent_step": first_step,
             "first3_agent_seconds": first3_time,
+            "first3_materialized_seconds": first3_time,
             "first3_agent_step": first3_step,
+            "first3_materialized_step": first3_step,
             "all_final_agent_seconds": all_time,
             "all_final_agent_step": all_step,
             "reasoning_end_seconds": self.end_marker_seconds["reasoning"],
@@ -656,6 +749,166 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             "schedule": getattr(self, "schedule_log", []),
             "trajectory": self._snapshots,
         }
+        if not self.agent_commit:
+            result["first3_recognized_seconds"] = None
+            result["first3_recognized_step"] = None
+            result["first3_recognized_exact"] = None
+            result["first3_commit_seconds"] = None
+            result["first3_commit_step"] = None
+            result["first3_commit_correct"] = None
+            return result
+
+        observed = self.agent_observer.metrics()
+        observed_slots = observed.get("agent_slots") or []
+        first_k = min(3, len(slots))
+        shadow_times = []
+        shadow_steps = []
+        shadow_agents = []
+        evaluated_shadows = []
+        wrong_anchor_count = 0
+        final_agent_match_count = 0
+
+        for index, prediction in enumerate(observed_slots):
+            shadow_agent = prediction.get("shadow_agent")
+            shadow_seconds = prediction.get("shadow_seconds")
+            shadow_step = prediction.get("shadow_step")
+            if shadow_agent is None or shadow_seconds is None:
+                continue
+            expected_agent = agents[index] if index < len(agents) else None
+            expected_offset = final[index][0] if index < len(final) else None
+            shadow_offset = prediction.get("shadow_anchor_offset")
+            wrong_anchor = (
+                expected_offset is None
+                or shadow_offset is None
+                or int(shadow_offset) != int(expected_offset)
+            )
+            final_agent_match = (
+                expected_agent is not None and shadow_agent == expected_agent
+            )
+            shadow_correct = (not wrong_anchor) and final_agent_match
+            materialized_seconds = (
+                slots[index].get("materialized_seconds")
+                if index < len(slots) else None
+            )
+            shadow_lead = (
+                float(materialized_seconds) - float(shadow_seconds)
+                if materialized_seconds is not None else None
+            )
+            prediction.update({
+                "shadow_wrong_anchor": wrong_anchor,
+                "shadow_final_agent": expected_agent,
+                "shadow_final_agent_match": final_agent_match,
+                "shadow_correct": shadow_correct,
+                "shadow_lead_vs_materialization": shadow_lead,
+            })
+            if index < len(slots):
+                slots[index].update({
+                    "predicted_agent": shadow_agent,
+                    "predicted_seconds": shadow_seconds,
+                    "predicted_step": shadow_step,
+                    "recognized_seconds": shadow_seconds,
+                    "recognized_step": shadow_step,
+                    "probability": prediction.get("shadow_probability"),
+                    "margin": prediction.get("shadow_margin"),
+                    "shadow_agent": shadow_agent,
+                    "shadow_seconds": shadow_seconds,
+                    "shadow_step": shadow_step,
+                    "shadow_anchor_offset": shadow_offset,
+                    "shadow_anchor_observed_ratio": prediction.get(
+                        "shadow_anchor_observed_ratio"
+                    ),
+                    "shadow_anchor_consistent_steps": prediction.get(
+                        "shadow_anchor_consistent_steps"
+                    ),
+                    "shadow_probability": prediction.get("shadow_probability"),
+                    "shadow_margin": prediction.get("shadow_margin"),
+                    "shadow_wrong_anchor": wrong_anchor,
+                    "shadow_final_agent": expected_agent,
+                    "shadow_final_agent_match": final_agent_match,
+                    "shadow_correct": shadow_correct,
+                    "shadow_lead_vs_materialization": shadow_lead,
+                })
+            if index < first_k:
+                shadow_agents.append(shadow_agent)
+                shadow_times.append(shadow_seconds)
+                if shadow_step is not None:
+                    shadow_steps.append(shadow_step)
+            evaluated_shadows.append(shadow_correct)
+            wrong_anchor_count += int(wrong_anchor)
+            final_agent_match_count += int(final_agent_match)
+
+        complete_shadow = first_k > 0 and len(shadow_times) == first_k
+        first3_shadow_seconds = max(shadow_times) if complete_shadow else None
+        first3_shadow_step = (
+            max(shadow_steps)
+            if complete_shadow and len(shadow_steps) == first_k else None
+        )
+        first3_shadow_correct = (
+            tuple(shadow_agents) == tuple(agents[:first_k])
+            and all(
+                observed_slots[index].get("shadow_correct") is True
+                for index in range(first_k)
+            )
+            if complete_shadow else None
+        )
+        result.update({
+            "policy": "all",
+            "timing_source": "fixed_canvas_plan_first_plus_shadow_prefetch",
+            "agent_slots": slots,
+            "agent_observe": observed,
+            "first3_shadow_seconds": first3_shadow_seconds,
+            "first3_shadow_step": first3_shadow_step,
+            "first3_shadow_correct": first3_shadow_correct,
+            "first3_shadow_lead_vs_materialization": (
+                first3_time - first3_shadow_seconds
+                if first3_time is not None and first3_shadow_seconds is not None
+                else None
+            ),
+            # Common recognition fields deliberately alias the deployable
+            # shadow gate rather than an earlier, weaker recognition event.
+            "first3_recognized_seconds": first3_shadow_seconds,
+            "first3_recognized_step": first3_shadow_step,
+            "first3_recognized_exact": first3_shadow_correct,
+            "shadow_count": len(evaluated_shadows),
+            "shadow_coverage": (
+                len(shadow_times) / first_k if first_k else 0.0
+            ),
+            "shadow_correct_count": sum(evaluated_shadows),
+            "shadow_accuracy": (
+                sum(evaluated_shadows) / len(evaluated_shadows)
+                if evaluated_shadows else None
+            ),
+            "shadow_wrong_count": (
+                len(evaluated_shadows) - sum(evaluated_shadows)
+            ),
+            "shadow_wrong_rate": (
+                1.0 - sum(evaluated_shadows) / len(evaluated_shadows)
+                if evaluated_shadows else None
+            ),
+            "shadow_wrong_anchor_count": wrong_anchor_count,
+            "shadow_wrong_anchor_rate": (
+                wrong_anchor_count / len(evaluated_shadows)
+                if evaluated_shadows else None
+            ),
+            "shadow_final_agent_match_count": final_agent_match_count,
+            "shadow_final_agent_match_rate": (
+                final_agent_match_count / len(evaluated_shadows)
+                if evaluated_shadows else None
+            ),
+            # No token write occurs in ``all``.
+            "first3_commit_seconds": None,
+            "first3_commit_step": None,
+            "first3_commit_correct": None,
+            "commit_count": 0,
+            "commit_coverage": 0.0,
+            "commit_correct_count": 0,
+            "wrong_commit_count": 0,
+            "commit_accuracy": None,
+            "wrong_commit_rate": None,
+        })
+        return result
 
     def close(self) -> None:
+        if self.agent_observer is not None:
+            self.agent_observer.close()
         return None
