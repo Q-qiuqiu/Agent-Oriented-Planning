@@ -10,7 +10,7 @@ handle_interrupt() {
 trap handle_interrupt INT TERM
 
 MODEL_SIZE="1b"
-PLAN_VARIANT="base_llada"
+PLAN_VARIANT="full_llada_plan"
 
 # Runs sequentially by default; pass --batch to run this list concurrently.
 ASSIGNMENTS=(
@@ -19,7 +19,6 @@ ASSIGNMENTS=(
   "l_l_l"
   "m_m_m"
   "d_d_d"
-  "qm_qm_qm"
   "qc_qc_qc"
   "i_i_i"
   "s_s_s"

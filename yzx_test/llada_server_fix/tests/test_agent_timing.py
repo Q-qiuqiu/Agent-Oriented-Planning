@@ -3,7 +3,9 @@ import json
 from agent_timing import AgentTimingRecorder
 
 
-def record(recorder, query="q", method="commit", slots=None, **kwargs):
+def record(recorder, query="q", method="commit", slots=None, priority=None, **kwargs):
+    agent_priority = {"policy": method, "agent_slots": slots or []}
+    agent_priority.update(priority or {})
     return recorder.record(
         completion_id="completion",
         created_unix=1,
@@ -15,7 +17,7 @@ def record(recorder, query="q", method="commit", slots=None, **kwargs):
             "method": method,
             "generation_seconds": 12.5,
             "nfe": 1024,
-            "agent_priority": {"policy": method, "agent_slots": slots or []},
+            "agent_priority": agent_priority,
         },
         **kwargs,
     )
@@ -55,6 +57,13 @@ def test_compact_log_contains_predictions_natural_and_generation_time(tmp_path):
     assert result["nfe"] == 1024
     assert "agent_observe" not in result
     assert "fusion_prefetch" not in result
+    assert "agent_fusion" not in result
+    assert "first_agent_seconds" not in result
+    assert "first3_prediction_seconds" not in result
+    assert "first3_natural_seconds" not in result
+    assert "all_natural_seconds" not in result
+    assert "T_first3_plan" not in result
+    assert "T_first3_all" not in result
     assert json.loads(path.read_text()) == result
 
 
@@ -67,6 +76,78 @@ def test_base_has_only_natural_agents(tmp_path):
     }])
     assert result["predicted_agents"] == []
     assert result["natural_agents"][0]["agent"] == "knowledge_agent"
+
+
+def test_plan_log_keeps_only_core_natural_and_health_metrics(tmp_path):
+    recorder = AgentTimingRecorder(str(tmp_path / "plan.jsonl"))
+    result = record(
+        recorder,
+        method="plan",
+        slots=[{
+            "slot": 0,
+            "materialized_candidate": "knowledge_agent",
+            "materialized_seconds": 2.5,
+        }],
+        priority={
+            "final_plan_parse_success": True,
+            "plan_end_natural_success": True,
+            "reasoning_end_natural_success": True,
+            "plan_capacity_exhausted": False,
+            "reasoning_capacity_exhausted": False,
+            "unresolved_mask_count": 0,
+        },
+    )
+    assert "predicted_agents" not in result
+    assert "agent_fusion" not in result
+    assert "T_first3_all" not in result
+    assert result["agent_count"] == 1
+    assert "first_agent_seconds" not in result
+    assert "first3_natural_seconds" not in result
+    assert "T_first3_plan" not in result
+    assert "all_natural_seconds" not in result
+    assert result["final_plan_parse_success"] is True
+    assert result["unresolved_mask_count"] == 0
+
+
+def test_all_log_keeps_local_natural_fusion_and_first3_metrics(tmp_path):
+    recorder = AgentTimingRecorder(str(tmp_path / "all.jsonl"))
+    result = record(
+        recorder,
+        method="all",
+        slots=[{
+            "slot": 0,
+            "T_local_prediction": 3.0,
+            "T_natural_decode": 5.0,
+            "T_fused_prefetch": 3.0,
+            "predicted_agent": "search_agent",
+            "predicted_seconds": 3.0,
+            "natural_agent": "search_agent",
+            "materialized_candidate": "search_agent",
+            "materialized_seconds": 5.0,
+            "prediction_correct": True,
+            "source": "local",
+            "prefetched_agent": "search_agent",
+            "prefetch_source": "local",
+            "T_slot_prefetch": 3.0,
+            "local_lead": 2.0,
+            "fused_lead": 2.0,
+        }],
+        priority={
+            "T_first3_plan": 6.0,
+            "T_first3_all": 4.0,
+            "all_first3_speculative_exact": True,
+            "correct_first3_lead": 2.0,
+            "prediction_incremental_lead": 2.0,
+            "wrong_speculative_rate": 0.0,
+            "natural_fallback_rate": 0.0,
+            "all_not_later_than_plan": True,
+        },
+    )
+    assert result["agent_fusion"][0]["T_local_prediction"] == 3.0
+    assert result["agent_fusion"][0]["T_natural_decode"] == 5.0
+    assert result["T_first3_plan"] == 6.0
+    assert result["T_first3_all"] == 4.0
+    assert result["all_not_later_than_plan"] is True
 
 
 def test_same_query_different_methods_are_distinct_and_retries_upsert(tmp_path):
@@ -103,7 +184,7 @@ def test_legacy_log_is_backed_up_and_compacted(tmp_path):
     }) + "\n")
     recorder = AgentTimingRecorder(str(path))
     row = json.loads(path.read_text())
-    assert row["schema_version"] == 3
+    assert row["schema_version"] == 4
     assert row["natural_agents"][0]["agent"] == "search_agent"
     assert "agents" not in row
     assert recorder._migration_backup_path is not None

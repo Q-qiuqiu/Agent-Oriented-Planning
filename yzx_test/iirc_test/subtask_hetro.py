@@ -107,6 +107,11 @@ PLAN_FILES = {
     "full_llama3": "benchmarks/iirc/iirc_plans_full_llama3.json",
     "full_llada": "benchmarks/iirc/iirc_plans_full_llada.json",
     "base_llada": "benchmarks/iirc/iirc_plans_base_llada.json",
+    "base_llama3_agentfirst": "benchmarks/iirc/iirc_plans_base_llama3_agentfirst.json",
+    "full_llada_base": "benchmarks/iirc/iirc_plans_full_llada_base.json",
+    "full_llada_plan": "benchmarks/iirc/iirc_plans_full_llada_plan.json",
+    "full_llada_commit": "benchmarks/iirc/iirc_plans_full_llada_commit.json",
+    "full_llada_all": "benchmarks/iirc/iirc_plans_full_llada_all.json",
 }
 
 

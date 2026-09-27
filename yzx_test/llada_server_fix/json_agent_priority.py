@@ -144,6 +144,9 @@ class JsonAgentSlotRuntime:
     materialized_seconds: Optional[float] = None
     materialized_step: Optional[int] = None
     materialized_candidate: Optional[str] = None
+    first_local_evidence_seconds: Optional[float] = None
+    first_local_evidence_step: Optional[int] = None
+    local_observation_count_before_natural: int = 0
     last_distribution: Optional[Dict[str, float]] = field(default=None)
 
 
@@ -540,6 +543,9 @@ class JsonAgentFieldController:
             runtime.materialized_seconds = None
             runtime.materialized_step = None
             runtime.materialized_candidate = None
+            runtime.first_local_evidence_seconds = None
+            runtime.first_local_evidence_step = None
+            runtime.local_observation_count_before_natural = 0
             runtime.field_written = False
             runtime.fuzzy_matched_from = None
 
@@ -710,6 +716,11 @@ class JsonAgentFieldController:
         second = ranked[1][1] if len(ranked) > 1 else 0.0
         margin = probability - second
         now = self._elapsed()
+        if not from_natural and runtime.materialized_seconds is None:
+            if runtime.first_local_evidence_seconds is None:
+                runtime.first_local_evidence_seconds = now
+                runtime.first_local_evidence_step = global_step
+            runtime.local_observation_count_before_natural += 1
         if runtime.first_observed_seconds is None:
             runtime.first_observed_seconds = now
             runtime.first_observed_step = global_step
@@ -893,6 +904,41 @@ class JsonAgentFieldController:
             candidates = self._anchor_candidates(logits, x, logits_start)
             self._assign_anchors(x, candidates)
             self._scan_plan_complete(x, global_step)
+        else:
+            # The PLAN block is already active. Reuse its existing local
+            # refinement logits to discover anchors that were not yet visible
+            # at the block warmup; this performs no model call and does not
+            # modify x. Merge with prior PLAN-relative tracks so response order
+            # remains Slot1 -> Slot2 -> Slot3 across physical blocks.
+            local_candidates = self._anchor_candidates(logits, x, logits_start)
+            if local_candidates:
+                combined = {
+                    int(runtime.anchor_start): (
+                        int(runtime.anchor_start),
+                        tuple(runtime.anchor_token_ids),
+                        float(runtime.anchor_score),
+                        float(runtime.anchor_observed_ratio),
+                    )
+                    for runtime in self.slots
+                    if runtime.anchor_start is not None
+                }
+                for candidate in local_candidates:
+                    previous = combined.get(int(candidate[0]))
+                    if previous is None or (candidate[3], candidate[2]) > (
+                        previous[3], previous[2]
+                    ):
+                        combined[int(candidate[0])] = candidate
+                ordered = []
+                for candidate in sorted(combined.values(), key=lambda row: row[0]):
+                    if any(
+                        abs(candidate[0] - prior[0]) < self.config.min_anchor_gap
+                        for prior in ordered
+                    ):
+                        continue
+                    ordered.append(candidate)
+                    if len(ordered) == self.tracking_slots:
+                        break
+                self._assign_anchors(x, ordered)
         for slot_index, runtime in enumerate(self.slots):
             if runtime.confirmed:
                 continue
@@ -1199,6 +1245,13 @@ class JsonAgentFieldController:
                     "materialized_seconds": runtime.materialized_seconds,
                     "materialized_step": runtime.materialized_step,
                     "materialized_candidate": runtime.materialized_candidate,
+                    "first_local_evidence_seconds": (
+                        runtime.first_local_evidence_seconds
+                    ),
+                    "first_local_evidence_step": runtime.first_local_evidence_step,
+                    "local_observation_count_before_natural": (
+                        runtime.local_observation_count_before_natural
+                    ),
                     "probability": runtime.recognized_probability,
                     "margin": runtime.recognized_margin,
                     "confirmed": runtime.confirmed,

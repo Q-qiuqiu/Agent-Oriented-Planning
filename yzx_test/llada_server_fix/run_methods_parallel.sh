@@ -7,6 +7,8 @@ set -euo pipefail
 # Usage:
 #   GPU_A=2 GPU_B=3 METHODS="base commit plan all" \
 #     bash run_methods_parallel.sh TAG 5
+# Use LIMIT=all (the second positional argument) to omit --limit and process
+# every query provided by each benchmark script.
 
 TAG="${1:-final_methods_sanity_01}"
 LIMIT="${2:-5}"
@@ -45,8 +47,12 @@ run_client() {
   local benchmark="$1" port="$2" out="$3"
   local script="${benchmark}_test/build_subtask_full_benchmark_v2.py"
   local key_args=()
+  local limit_args=()
   if [[ "$benchmark" == "huskyqa" || "$benchmark" == "chronoqa" ]]; then
     key_args=(--planner-api-key empty)
+  fi
+  if [[ "$LIMIT" != "all" ]]; then
+    limit_args=(--limit "$LIMIT")
   fi
   (
     cd "$TEST_ROOT"
@@ -56,7 +62,7 @@ run_client() {
       "${key_args[@]}" \
       --planner-model "$MODEL" \
       --planner-max-tokens 1024 \
-      --limit "$LIMIT" \
+      "${limit_args[@]}" \
       --plans-output "$out/plans.json" \
       --benchmark-output "$out/expanded.json"
   ) |& tee "$out/client.log"
@@ -71,7 +77,7 @@ run_lane() {
     for method in $METHODS; do
       out="$OUT_ROOT/$benchmark/$method"
       mkdir -p "$out"
-      if [[ -e "$out/timings.jsonl" || -e "$out/plans.json" ]]; then
+      if [[ -e "$out/${benchmark}_full_timings.jsonl" || -e "$out/plans.json" ]]; then
         echo "Refusing existing output: $out (choose a new TAG)" >&2
         return 2
       fi
@@ -90,10 +96,9 @@ run_lane() {
           --max_gen_length 1024 \
           --steps_per_block 32 \
           --threshold 0.9 \
-          --policy reasonplan \
           --agent_timing_slots 16 \
           --plan_json_repair \
-          --agent_timing_log_path "$out/timings.jsonl" \
+          --agent-timing-log-dir "$out" \
           --log_level info
       ) >"$out/server.log" 2>&1 &
       pid=$!

@@ -197,7 +197,10 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         priority_slots: int = 3,
         tracking_slots: int = 16,
         structure_mode: str,
-        agent_commit: bool = False,
+        local_agent_observe: bool = False,
+        local_observation_stride: int = 1,
+        local_agent_probability: float = 0.90,
+        lightweight_tracking: bool = False,
     ) -> None:
         super().__init__(
             tokenizer=tokenizer,
@@ -242,9 +245,23 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         )
         self.layout.validate()
         self.structure_mode = structure_mode
-        self.agent_commit = bool(agent_commit)
+        self.lightweight_tracking = bool(lightweight_tracking)
+        self.local_agent_observe = bool(local_agent_observe)
+        if self.lightweight_tracking and self.local_agent_observe:
+            raise ValueError(
+                "lightweight_tracking is reserved for prediction-free plan mode."
+            )
+        self.local_observation_stride = int(local_observation_stride)
+        if self.local_observation_stride < 1:
+            raise ValueError("local_observation_stride must be at least 1.")
+        self.local_agent_probability = float(local_agent_probability)
+        if not 0.0 <= self.local_agent_probability <= 1.0:
+            raise ValueError("local_agent_probability must be within [0, 1].")
+        self.local_observer_warmup_calls = 0
+        self.local_observer_refinement_calls = 0
+        self.local_observer_wall_time = 0.0
         self.agent_observer = None
-        if self.agent_commit:
+        if self.local_agent_observe:
             # ``all`` reuses normal PLAN warmups only and remains read-only.
             self.agent_observer = JsonAgentFieldController(
                 tokenizer=tokenizer,
@@ -252,7 +269,7 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
                     catalog=list(catalog),
                     priority_slots=priority_slots,
                     tracking_slots=max(priority_slots, tracking_slots),
-                    tentative_probability=0.90,
+                    tentative_probability=self.local_agent_probability,
                     tentative_margin=0.40,
                     allow_speculative_anchor_commit=True,
                     probe_period=0,
@@ -298,6 +315,9 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         self.plan_json_start_materialized_seconds: Optional[float] = 0.0
         self._fixed_reference: List[Tuple[int, int]] = []
         self._snapshots: List[Dict[str, object]] = []
+        self._last_materialized_occurrences: Optional[
+            Tuple[Tuple[int, str], ...]
+        ] = None
         self._final_occurrences: List[Tuple[int, str]] = []
         self._final_plan = None
         self._evaluation_plan = None
@@ -313,7 +333,8 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
                 self.layout.plan_start, self.layout.plan_storage_end
             )
         self.probe_forwards = 0
-        self._fixed_reference = self.layout.fixed_ids()
+        if not self.lightweight_tracking:
+            self._fixed_reference = self.layout.fixed_ids()
         self._snapshot(x, step=0, nfe=0)
 
     def observe_plan_logits(
@@ -324,14 +345,13 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         logits_start: int,
         global_step: int,
     ) -> None:
-        """Observe or commit confidence-gated Agent values inside PLAN."""
+        """Read PLAN-local logits without changing the decoding trajectory."""
 
-        if not self.agent_commit:
+        if not self.local_agent_observe:
             return
+        started_at = time.perf_counter()
         # Compaction can move the PLAN capacity, so refresh its exact bounds.
-        # Localization stays inside the known PLAN region. In ``all`` the
-        # nested controller is prediction-only; in fixed-PLAN ``commit`` it
-        # writes and freezes values through its normal decoder-mask path.
+        # The nested controller is prediction-only (probe_period=0).
         self.agent_observer.set_search_region(
             self.layout.plan_start, self.layout.plan_storage_end
         )
@@ -340,6 +360,20 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             x,
             logits_start=logits_start,
             global_step=global_step,
+        )
+        self.local_observer_wall_time += time.perf_counter() - started_at
+        if logits_start == 0:
+            self.local_observer_warmup_calls += 1
+        else:
+            self.local_observer_refinement_calls += 1
+
+    def should_observe_local_step(self, local_step: int) -> bool:
+        """Sample existing block-local logits without adding model forwards."""
+
+        return (
+            self.local_agent_observe
+            and local_step > 0
+            and local_step % self.local_observation_stride == 0
         )
 
     def decoder_mask(self, mask_index, mask_start=0):
@@ -353,13 +387,11 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             overlap_end = min(mask_end, fixed_end)
             if overlap_start < overlap_end:
                 result[:, overlap_start - mask_start : overlap_end - mask_start] = False
-        if self.agent_observer is not None:
-            result = self.agent_observer.decoder_mask(result, mask_start=mask_start)
         return result
 
     @property
     def observes_plan_warmups(self) -> bool:
-        return self.agent_commit
+        return self.local_agent_observe
 
     def start_phase(self, phase: str) -> None:
         self.phase = phase
@@ -471,7 +503,8 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             # without resetting their cross-warmup stability state.
             self.agent_observer.shift_positions(old_storage_end, -removed)
         self.layout.mark_compacted(phase)
-        self._fixed_reference = self.layout.fixed_ids()
+        if not self.lightweight_tracking:
+            self._fixed_reference = self.layout.fixed_ids()
         return x
 
     def finish_phase(self, x: torch.Tensor, phase: str) -> Tuple[torch.Tensor, bool]:
@@ -532,6 +565,32 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         return sorted(set(values), key=lambda item: item[0])
 
     def _snapshot(self, x: torch.Tensor, *, step: int, nfe: int) -> None:
+        self._last_step = int(step)
+        self._nfe = int(nfe)
+        if self.lightweight_tracking:
+            # PLAN is decoded first.  Only scan while that phase is active,
+            # and retain an event only when the naturally materialized ordered
+            # Agent occurrences change.  This removes per-step reasoning scans,
+            # two full-region MASK reductions and the diagnostic trajectory.
+            if self.phase != "plan":
+                return
+            occurrences = tuple(self._current_occurrences(x))
+            if occurrences == self._last_materialized_occurrences:
+                return
+            self._last_materialized_occurrences = occurrences
+            if not occurrences and not self._snapshots:
+                return
+            self._snapshots.append({
+                "step": int(step),
+                "nfe": int(nfe),
+                "seconds": float(self._elapsed()),
+                "materialized_agents": [
+                    {"plan_offset": offset, "agent": name}
+                    for offset, name in occurrences
+                ],
+            })
+            return
+
         occurrences = self._current_occurrences(x)
         self._snapshots.append({
             "step": int(step),
@@ -546,8 +605,6 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
                 {"plan_offset": offset, "agent": name} for offset, name in occurrences
             ],
         })
-        self._last_step = int(step)
-        self._nfe = int(nfe)
 
     def record_step(self, x, *, global_step, nfe, physical_block, local_step) -> None:
         del physical_block, local_step
@@ -571,8 +628,27 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         self._snapshot(x, step=self._last_step, nfe=self._nfe)
         self.phase_times["generation_complete"] = self._elapsed()
         self._final_occurrences = self._current_occurrences(x)
+        if self.lightweight_tracking:
+            # A valid PLAN was already parsed at Dynamic END. Reuse it instead
+            # of decoding/parsing the PLAN and copying the full canvas again.
+            if self.plan_completion is not None:
+                self._final_plan = self.plan_completion.plan
+                self._json_end = None
+            elif self.phase_remaining_masks(x, "plan") == 0:
+                _plan_ids, plan_text = self._phase_payload(x, "plan")
+                self._final_plan, self._json_end = self._raw_json_array(
+                    plan_text, self.config.catalog
+                )
+            else:
+                self._final_plan, self._json_end = None, None
+            self._plan_text = ""
+            self._reasoning_text = ""
+            self._plan_payload_ids = torch.tensor([])
+            self._reasoning_payload_ids = torch.tensor([])
+            self._final_ids = torch.tensor([])
+            return
+
         plan_ids, plan_text = self._phase_payload(x, "plan")
-        reasoning_ids, reasoning_text = self._phase_payload(x, "reasoning")
         if self.phase_remaining_masks(x, "plan") == 0:
             self._final_plan, self._json_end = self._raw_json_array(
                 plan_text, self.config.catalog
@@ -580,6 +656,7 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         else:
             self._final_plan, self._json_end = None, None
         self._plan_text = plan_text
+        reasoning_ids, reasoning_text = self._phase_payload(x, "reasoning")
         self._reasoning_text = reasoning_text
         self._plan_payload_ids = plan_ids.detach().cpu()
         self._reasoning_payload_ids = reasoning_ids.detach().cpu()
@@ -601,7 +678,59 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             return
         self._evaluation_plan = plan
 
+    def _lightweight_plan_metrics(self) -> Dict[str, object]:
+        """Return only fields required by the large-scale PLAN experiment."""
+
+        final = self._final_occurrences
+        slots = []
+        for slot, (offset, name) in enumerate(final):
+            target_time, target_step = self._first_cover_time(
+                self._snapshots, [(offset, name)]
+            )
+            slots.append({
+                "slot": slot,
+                "agent": name,
+                "materialized_seconds": target_time,
+                "materialized_step": target_step,
+                "materialized_candidate": name,
+            })
+        agents = [name for _, name in final]
+        evaluation_plan = (
+            self._evaluation_plan
+            if self._evaluation_plan is not None else self._final_plan
+        )
+        return {
+            "policy": "plan",
+            "structure_mode": self.structure_mode,
+            "timing_source": "plan_first_natural_materialization_lightweight",
+            "read_only": True,
+            "lightweight_tracking": True,
+            "priority_slots": min(3, len(final)),
+            "tracking_slots": len(final),
+            "agent_slots": slots,
+            "final_agent_sequence": agents,
+            "first3_tuple": agents[:3],
+            "final_plan_parse_success": evaluation_plan is not None,
+            "plan_end_natural_success": self.marker_offsets["plan"] is not None,
+            "reasoning_end_natural_success": (
+                self.marker_offsets["reasoning"] is not None
+            ),
+            "plan_capacity_exhausted": self.capacity_exhausted["plan"],
+            "reasoning_capacity_exhausted": (
+                self.capacity_exhausted["reasoning"]
+            ),
+            "first3_recognized_seconds": None,
+            "first3_recognized_step": None,
+            "first3_recognized_exact": None,
+            "first3_commit_seconds": None,
+            "first3_commit_step": None,
+            "first3_commit_correct": None,
+        }
+
     def metrics(self) -> Dict[str, object]:
+        if self.lightweight_tracking:
+            return self._lightweight_plan_metrics()
+
         final = self._final_occurrences
         first_time, first_step = self._first_cover_time(self._snapshots, final[:1])
         first3_time, first3_step = self._first_cover_time(
@@ -749,7 +878,7 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
             "schedule": getattr(self, "schedule_log", []),
             "trajectory": self._snapshots,
         }
-        if not self.agent_commit:
+        if not self.local_agent_observe:
             result["first3_recognized_seconds"] = None
             result["first3_recognized_step"] = None
             result["first3_recognized_exact"] = None
@@ -761,150 +890,214 @@ class DynamicFixedCanvasMonitor(PassiveJsonAgentMonitor):
         observed = self.agent_observer.metrics()
         observed_slots = observed.get("agent_slots") or []
         first_k = min(3, len(slots))
-        shadow_times = []
-        shadow_steps = []
-        shadow_agents = []
-        evaluated_shadows = []
-        wrong_anchor_count = 0
-        final_agent_match_count = 0
+        local_triggered = 0
+        local_correct = 0
+        local_wrong = 0
+        natural_fallback = 0
 
-        for index, prediction in enumerate(observed_slots):
-            shadow_agent = prediction.get("shadow_agent")
-            shadow_seconds = prediction.get("shadow_seconds")
-            shadow_step = prediction.get("shadow_step")
-            if shadow_agent is None or shadow_seconds is None:
-                continue
-            expected_agent = agents[index] if index < len(agents) else None
+        # Online behavior is Local prediction OR zero-lag Natural fallback.
+        # The final PLAN is used only now, after generation, to score whether a
+        # speculative preload was correct; it never affects the trajectory.
+        for index, slot in enumerate(slots):
+            prediction = observed_slots[index] if index < len(observed_slots) else {}
+            local_agent = prediction.get("shadow_agent")
+            local_seconds = prediction.get("shadow_seconds")
+            local_step = prediction.get("shadow_step")
+            local_offset = prediction.get("shadow_anchor_offset")
+            natural_agent = slot.get("materialized_candidate") or slot.get("agent")
+            natural_seconds = slot.get("materialized_seconds")
+            natural_step = slot.get("materialized_step")
             expected_offset = final[index][0] if index < len(final) else None
-            shadow_offset = prediction.get("shadow_anchor_offset")
-            wrong_anchor = (
-                expected_offset is None
-                or shadow_offset is None
-                or int(shadow_offset) != int(expected_offset)
+            position_correct = (
+                local_offset is not None
+                and expected_offset is not None
+                and int(local_offset) == int(expected_offset)
             )
-            final_agent_match = (
-                expected_agent is not None and shadow_agent == expected_agent
+            prediction_correct = (
+                local_agent is not None
+                and natural_agent is not None
+                and local_agent == natural_agent
             )
-            shadow_correct = (not wrong_anchor) and final_agent_match
-            materialized_seconds = (
-                slots[index].get("materialized_seconds")
-                if index < len(slots) else None
+            local_lead = (
+                float(natural_seconds) - float(local_seconds)
+                if natural_seconds is not None and local_seconds is not None
+                else None
             )
-            shadow_lead = (
-                float(materialized_seconds) - float(shadow_seconds)
-                if materialized_seconds is not None else None
+            local_wins = (
+                local_agent is not None
+                and local_seconds is not None
+                and natural_seconds is not None
+                and float(local_seconds) <= float(natural_seconds)
             )
-            prediction.update({
-                "shadow_wrong_anchor": wrong_anchor,
-                "shadow_final_agent": expected_agent,
-                "shadow_final_agent_match": final_agent_match,
-                "shadow_correct": shadow_correct,
-                "shadow_lead_vs_materialization": shadow_lead,
-            })
-            if index < len(slots):
-                slots[index].update({
-                    "predicted_agent": shadow_agent,
-                    "predicted_seconds": shadow_seconds,
-                    "predicted_step": shadow_step,
-                    "recognized_seconds": shadow_seconds,
-                    "recognized_step": shadow_step,
-                    "probability": prediction.get("shadow_probability"),
-                    "margin": prediction.get("shadow_margin"),
-                    "shadow_agent": shadow_agent,
-                    "shadow_seconds": shadow_seconds,
-                    "shadow_step": shadow_step,
-                    "shadow_anchor_offset": shadow_offset,
-                    "shadow_anchor_observed_ratio": prediction.get(
-                        "shadow_anchor_observed_ratio"
-                    ),
-                    "shadow_anchor_consistent_steps": prediction.get(
-                        "shadow_anchor_consistent_steps"
-                    ),
-                    "shadow_probability": prediction.get("shadow_probability"),
-                    "shadow_margin": prediction.get("shadow_margin"),
-                    "shadow_wrong_anchor": wrong_anchor,
-                    "shadow_final_agent": expected_agent,
-                    "shadow_final_agent_match": final_agent_match,
-                    "shadow_correct": shadow_correct,
-                    "shadow_lead_vs_materialization": shadow_lead,
-                })
-            if index < first_k:
-                shadow_agents.append(shadow_agent)
-                shadow_times.append(shadow_seconds)
-                if shadow_step is not None:
-                    shadow_steps.append(shadow_step)
-            evaluated_shadows.append(shadow_correct)
-            wrong_anchor_count += int(wrong_anchor)
-            final_agent_match_count += int(final_agent_match)
+            if local_wins:
+                prefetched_agent = str(local_agent)
+                prefetch_seconds = float(local_seconds)
+                prefetch_step = local_step
+                prefetch_source = "local"
+                if index < first_k:
+                    local_triggered += 1
+                    local_correct += int(prediction_correct)
+                    local_wrong += int(not prediction_correct)
+            else:
+                prefetched_agent = natural_agent
+                prefetch_seconds = natural_seconds
+                prefetch_step = natural_step
+                prefetch_source = "natural" if natural_seconds is not None else None
+                if index < first_k:
+                    natural_fallback += int(prefetch_source == "natural")
 
-        complete_shadow = first_k > 0 and len(shadow_times) == first_k
-        first3_shadow_seconds = max(shadow_times) if complete_shadow else None
-        first3_shadow_step = (
-            max(shadow_steps)
-            if complete_shadow and len(shadow_steps) == first_k else None
-        )
-        first3_shadow_correct = (
-            tuple(shadow_agents) == tuple(agents[:first_k])
-            and all(
-                observed_slots[index].get("shadow_correct") is True
-                for index in range(first_k)
+            fused_lead = (
+                float(natural_seconds) - float(prefetch_seconds)
+                if natural_seconds is not None and prefetch_seconds is not None
+                else None
             )
-            if complete_shadow else None
+            if fused_lead is not None and fused_lead < -1e-9:
+                raise AssertionError(
+                    f"All fallback is later than natural decode for slot {index}: "
+                    f"{prefetch_seconds} > {natural_seconds}"
+                )
+            wrong_prefetch = prefetch_source == "local" and not prediction_correct
+            correction_seconds = natural_seconds if wrong_prefetch else None
+            wrong_duration = (
+                float(correction_seconds) - float(prefetch_seconds)
+                if correction_seconds is not None and prefetch_seconds is not None
+                else None
+            )
+            slot.update({
+                "T_first_local_evidence": prediction.get(
+                    "first_local_evidence_seconds"
+                ),
+                "first_local_evidence_step": prediction.get(
+                    "first_local_evidence_step"
+                ),
+                "T_local_prediction": local_seconds,
+                "local_prediction_step": local_step,
+                "predicted_agent": local_agent,
+                "predicted_seconds": local_seconds,
+                "local_anchor_offset": local_offset,
+                "local_probability": prediction.get("shadow_probability"),
+                "local_margin": prediction.get("shadow_margin"),
+                "local_observation_count_before_natural": prediction.get(
+                    "local_observation_count_before_natural", 0
+                ),
+                "probability": prediction.get("shadow_probability"),
+                "margin": prediction.get("shadow_margin"),
+                "T_natural_decode": natural_seconds,
+                "natural_decode_step": natural_step,
+                "natural_agent": natural_agent,
+                "T_fused_prefetch": prefetch_seconds,
+                "prefetched_agent": prefetched_agent,
+                "T_slot_prefetch": prefetch_seconds,
+                "prefetch_step": prefetch_step,
+                "prefetch_source": prefetch_source,
+                "source": prefetch_source,
+                "prediction_correct": (
+                    prediction_correct if local_agent is not None else None
+                ),
+                "prefetch_correct": (
+                    prefetched_agent == natural_agent
+                    if prefetched_agent is not None and natural_agent is not None
+                    else None
+                ),
+                "local_position_correct": (
+                    position_correct if local_agent is not None else None
+                ),
+                "local_lead": local_lead,
+                "fused_lead": fused_lead,
+                "wrong_prefetch": wrong_prefetch,
+                "T_correction": correction_seconds,
+                "wrong_prefetch_duration": wrong_duration,
+                "corrected_agent": natural_agent if wrong_prefetch else None,
+            })
+
+        first_slots = slots[:first_k]
+        first3_plan = (
+            max(float(slot["T_natural_decode"]) for slot in first_slots)
+            if first_k > 0
+            and all(slot.get("T_natural_decode") is not None for slot in first_slots)
+            else None
         )
+        first3_all = (
+            max(float(slot["T_fused_prefetch"]) for slot in first_slots)
+            if first_k > 0
+            and all(slot.get("T_fused_prefetch") is not None for slot in first_slots)
+            else None
+        )
+        prefetched_tuple = [slot.get("prefetched_agent") for slot in first_slots]
+        natural_tuple = [slot.get("natural_agent") for slot in first_slots]
+        local_tuple = [slot.get("predicted_agent") for slot in first_slots]
+        local_first3_coverage = (
+            first_k > 0
+            and all(slot.get("prefetch_source") == "local" for slot in first_slots)
+        )
+        local_first3_exact = (
+            local_tuple == natural_tuple if local_first3_coverage else None
+        )
+        first3_exact = (
+            prefetched_tuple == natural_tuple
+            if first_k > 0 and all(value is not None for value in prefetched_tuple + natural_tuple)
+            else None
+        )
+        incremental_lead = (
+            float(first3_plan) - float(first3_all)
+            if first3_plan is not None and first3_all is not None else None
+        )
+        if incremental_lead is not None and incremental_lead < -1e-9:
+            raise AssertionError(
+                f"All First-3 is later than Plan natural timing: {first3_all} > {first3_plan}"
+            )
         result.update({
             "policy": "all",
-            "timing_source": "fixed_canvas_plan_first_plus_shadow_prefetch",
+            "timing_source": "plan_first_local_prediction_natural_fallback",
+            "read_only": True,
+            "local_observation_stride": self.local_observation_stride,
+            "local_agent_probability": self.local_agent_probability,
+            "local_observer_warmup_calls": self.local_observer_warmup_calls,
+            "local_observer_refinement_calls": (
+                self.local_observer_refinement_calls
+            ),
+            "local_observer_wall_time": self.local_observer_wall_time,
             "agent_slots": slots,
             "agent_observe": observed,
-            "first3_shadow_seconds": first3_shadow_seconds,
-            "first3_shadow_step": first3_shadow_step,
-            "first3_shadow_correct": first3_shadow_correct,
-            "first3_shadow_lead_vs_materialization": (
-                first3_time - first3_shadow_seconds
-                if first3_time is not None and first3_shadow_seconds is not None
-                else None
+            "T_first3_plan": first3_plan,
+            "T_first3_all": first3_all,
+            "first3_plan_seconds": first3_plan,
+            "first3_all_seconds": first3_all,
+            "first3_predicted_tuple": prefetched_tuple,
+            "first3_natural_tuple": natural_tuple,
+            "local_first3_tuple": local_tuple,
+            "local_first3_coverage": local_first3_coverage,
+            "local_first3_exact": local_first3_exact,
+            "all_first3_speculative_exact": first3_exact,
+            "first3_prefetch_exact": first3_exact,
+            "prediction_incremental_lead": incremental_lead,
+            "correct_first3_lead": (
+                incremental_lead if first3_exact is True else None
             ),
-            # Common recognition fields deliberately alias the deployable
-            # shadow gate rather than an earlier, weaker recognition event.
-            "first3_recognized_seconds": first3_shadow_seconds,
-            "first3_recognized_step": first3_shadow_step,
-            "first3_recognized_exact": first3_shadow_correct,
-            "shadow_count": len(evaluated_shadows),
-            "shadow_coverage": (
-                len(shadow_times) / first_k if first_k else 0.0
+            "all_not_later_than_plan": (
+                incremental_lead >= -1e-9 if incremental_lead is not None else None
             ),
-            "shadow_correct_count": sum(evaluated_shadows),
-            "shadow_accuracy": (
-                sum(evaluated_shadows) / len(evaluated_shadows)
-                if evaluated_shadows else None
+            "local_prediction_count": local_triggered,
+            "local_prediction_accuracy": (
+                local_correct / local_triggered if local_triggered else None
             ),
-            "shadow_wrong_count": (
-                len(evaluated_shadows) - sum(evaluated_shadows)
+            "wrong_speculative_count": local_wrong,
+            "wrong_speculative_rate": (
+                local_wrong / local_triggered if local_triggered else None
             ),
-            "shadow_wrong_rate": (
-                1.0 - sum(evaluated_shadows) / len(evaluated_shadows)
-                if evaluated_shadows else None
+            "natural_fallback_count": natural_fallback,
+            "natural_fallback_rate": (
+                natural_fallback / first_k if first_k else None
             ),
-            "shadow_wrong_anchor_count": wrong_anchor_count,
-            "shadow_wrong_anchor_rate": (
-                wrong_anchor_count / len(evaluated_shadows)
-                if evaluated_shadows else None
-            ),
-            "shadow_final_agent_match_count": final_agent_match_count,
-            "shadow_final_agent_match_rate": (
-                final_agent_match_count / len(evaluated_shadows)
-                if evaluated_shadows else None
-            ),
-            # No token write occurs in ``all``.
+            # Compatibility aliases for the compact timing recorder.
+            "first3_recognized_seconds": first3_all,
+            "first3_recognized_step": None,
+            "first3_recognized_exact": first3_exact,
             "first3_commit_seconds": None,
             "first3_commit_step": None,
             "first3_commit_correct": None,
             "commit_count": 0,
             "commit_coverage": 0.0,
-            "commit_correct_count": 0,
-            "wrong_commit_count": 0,
-            "commit_accuracy": None,
-            "wrong_commit_rate": None,
         })
         return result
 

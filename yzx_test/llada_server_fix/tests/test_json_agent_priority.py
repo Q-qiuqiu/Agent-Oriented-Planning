@@ -83,7 +83,7 @@ def test_candidate_only_scoring_matches_full_vocabulary_log_softmax():
     torch.testing.assert_close(torch.tensor(list(actual.values())), expected)
 
 
-def test_fixed_search_region_accepts_current_canvas_and_rejects_local_logits(
+def test_fixed_search_region_accepts_full_and_local_logits_without_extra_forward(
     monkeypatch,
 ):
     tokenizer = CharacterTokenizer()
@@ -118,12 +118,59 @@ def test_fixed_search_region_accepts_current_canvas_and_rejects_local_logits(
     assert len(scans) == 1
     assert controller._full_sequence_observations == 1
 
-    # A normal 32-token block observation intersects the PLAN region but does
-    # not cover it, so it must not rerun region-wide anchor localization.
+    # A normal 32-token block observation scans only its existing local logits;
+    # it must not be counted as another full-sequence observation.
     local_logits = torch.zeros((1, 32, 300))
     controller.observe(local_logits, x, logits_start=40, global_step=1)
-    assert len(scans) == 1
+    assert len(scans) == 2
     assert controller._full_sequence_observations == 1
+
+
+def test_local_refinement_logits_can_discover_and_stabilize_plan_anchor():
+    tokenizer = CharacterTokenizer()
+    controller = JsonAgentFieldController(
+        tokenizer=tokenizer,
+        config=JsonAgentPriorityConfig(
+            catalog=["code_agent", "math_agent", "search_agent"],
+            priority_slots=3,
+            anchor_stable_steps=2,
+            tentative_probability=0.90,
+            tentative_margin=0.40,
+            allow_speculative_anchor_commit=True,
+            probe_period=0,
+        ),
+        prompt_length=8,
+        gen_length=120,
+        mask_id=tokenizer.mask_token_id,
+    )
+    x = torch.full((1, 128), tokenizer.mask_token_id, dtype=torch.long)
+    x[:, :8] = 1
+    controller.initialize(x)
+    controller.set_search_region(40, 90)
+
+    block_start = 40
+    anchor_start = 44
+    logits = torch.full((1, 32, 300), -20.0)
+    logits[:, :, 0] = 0.0
+    anchor = controller.anchor_variants[0]
+    for offset, token_id in enumerate(anchor):
+        logits[0, anchor_start - block_start + offset, token_id] = 12.0
+    name_start = anchor_start + len(anchor)
+    for offset, token_id in enumerate(
+        controller.padded_catalog_ids["search_agent"]
+    ):
+        logits[0, name_start - block_start + offset, token_id] = 12.0
+
+    original = x.clone()
+    controller.observe(logits, x, logits_start=block_start, global_step=1)
+    controller.observe(logits, x, logits_start=block_start, global_step=2)
+    slot = controller.metrics()["agent_slots"][0]
+    assert slot["shadow_agent"] == "search_agent"
+    assert slot["shadow_step"] == 2
+    assert slot["first_local_evidence_step"] == 1
+    assert slot["local_observation_count_before_natural"] == 2
+    assert controller._full_sequence_observations == 0
+    assert torch.equal(x, original)
 
 
 def test_first_four_json_agent_occurrences_are_independent_and_fifth_is_normal(

@@ -52,7 +52,11 @@ class PositionedModel:
         return types.SimpleNamespace(logits=logits, past_key_values=((torch.zeros(1),),))
 
 
-def run(mode, agent_commit=False, threshold=0.9):
+def run(
+    mode, local_agent_observe=False, threshold=0.9,
+    local_observation_stride=1, local_agent_probability=0.90,
+    lightweight_tracking=False,
+):
     prompt = torch.tensor([[2, 3, 4]])
     monitor = FixedCanvasMonitor(
         tokenizer=CharacterTokenizer(),
@@ -62,7 +66,10 @@ def run(mode, agent_commit=False, threshold=0.9):
         mask_id=CharacterTokenizer.mask_token_id,
         reasoning_budget=32,
         structure_mode=mode,
-        agent_commit=agent_commit,
+        local_agent_observe=local_agent_observe,
+        local_observation_stride=local_observation_stride,
+        local_agent_probability=local_agent_probability,
+        lightweight_tracking=lightweight_tracking,
     )
     output, nfe = generate_with_fixed_canvas_dual_cache(
         ConstantModel(), prompt, steps=128, gen_length=128, block_length=32,
@@ -89,14 +96,189 @@ def test_plan_first_changes_only_region_visit_order_for_constant_model():
     assert torch.equal(vanilla, plan_first)
 
 
+def test_plan_lightweight_tracking_preserves_output_nfe_and_core_metrics():
+    diagnostic, diagnostic_nfe, _ = run("fixed_canvas_plan_first")
+    lightweight, lightweight_nfe, metrics = run(
+        "fixed_canvas_plan_first", lightweight_tracking=True
+    )
+    assert torch.equal(diagnostic, lightweight)
+    assert diagnostic_nfe == lightweight_nfe
+    assert metrics["lightweight_tracking"] is True
+    assert "first_agent_seconds" not in metrics
+    assert "first3_materialized_seconds" not in metrics
+    assert "T_first3_plan" not in metrics
+    assert "all_final_agent_seconds" not in metrics
+    assert "trajectory" not in metrics
+    assert "schedule" not in metrics
+    assert "reasoning_effective_tokens" not in metrics
+
+
 def test_all_observer_is_read_only_and_adds_no_forward():
-    plan, plan_nfe, _ = run("fixed_canvas_plan_first", agent_commit=False)
-    all_output, all_nfe, metrics = run("fixed_canvas_plan_first", agent_commit=True)
+    plan, plan_nfe, _ = run("fixed_canvas_plan_first", local_agent_observe=False)
+    all_output, all_nfe, metrics = run(
+        "fixed_canvas_plan_first", local_agent_observe=True
+    )
     assert torch.equal(plan, all_output)
     assert plan_nfe == all_nfe
     assert metrics["agent_observe"]["prediction_only"] is True
     assert metrics["agent_observe"]["probe_forwards"] == 0
     assert metrics["commit_count"] == 0
+
+
+def test_local_observation_stride_only_subsamples_existing_refinement_logits():
+    monitor = FixedCanvasMonitor(
+        tokenizer=CharacterTokenizer(),
+        catalog=["a_agent", "b_agent"],
+        prompt_length=3,
+        gen_length=128,
+        mask_id=CharacterTokenizer.mask_token_id,
+        reasoning_budget=32,
+        structure_mode="fixed_canvas_plan_first",
+        local_agent_observe=True,
+        local_observation_stride=4,
+    )
+    assert [
+        step for step in range(1, 17)
+        if monitor.should_observe_local_step(step)
+    ] == [4, 8, 12, 16]
+
+    stride1, nfe1, _ = run(
+        "fixed_canvas_plan_first",
+        local_agent_observe=True,
+        threshold=None,
+        local_observation_stride=1,
+    )
+    stride4, nfe4, metrics4 = run(
+        "fixed_canvas_plan_first",
+        local_agent_observe=True,
+        threshold=None,
+        local_observation_stride=4,
+    )
+    assert torch.equal(stride1, stride4)
+    assert nfe1 == nfe4
+    assert metrics4["local_observation_stride"] == 4
+    assert metrics4["local_observer_refinement_calls"] > 0
+
+
+def test_all_local_probability_is_read_only_and_configures_only_the_gate():
+    probability90, nfe90, _ = run(
+        "fixed_canvas_plan_first",
+        local_agent_observe=True,
+        threshold=None,
+        local_observation_stride=8,
+        local_agent_probability=0.90,
+    )
+    probability80, nfe80, metrics80 = run(
+        "fixed_canvas_plan_first",
+        local_agent_observe=True,
+        threshold=None,
+        local_observation_stride=8,
+        local_agent_probability=0.80,
+    )
+    assert torch.equal(probability90, probability80)
+    assert nfe90 == nfe80
+    assert metrics80["local_agent_probability"] == 0.80
+    assert metrics80["agent_observe"]["prediction_only"] is True
+
+
+def _fusion_metrics(local_third="a_agent", local_third_seconds=4.0):
+    tokenizer = CharacterTokenizer()
+    monitor = FixedCanvasMonitor(
+        tokenizer=tokenizer,
+        catalog=["a_agent", "b_agent", "c_agent"],
+        prompt_length=3,
+        gen_length=128,
+        mask_id=tokenizer.mask_token_id,
+        reasoning_budget=32,
+        structure_mode="fixed_canvas_plan_first",
+        local_agent_observe=True,
+    )
+    monitor._final_occurrences = [
+        (10, "a_agent"), (30, "b_agent"), (50, "a_agent")
+    ]
+    monitor._snapshots = [
+        {
+            "step": step,
+            "nfe": step,
+            "seconds": seconds,
+            "phase": "plan",
+            "plan_masks": 0,
+            "reasoning_masks": 0,
+            "reasoning_end_found": True,
+            "plan_end_found": True,
+            "materialized_agents": materialized,
+        }
+        for step, seconds, materialized in (
+            (1, 4.0, [{"plan_offset": 10, "agent": "a_agent"}]),
+            (2, 5.0, [
+                {"plan_offset": 10, "agent": "a_agent"},
+                {"plan_offset": 30, "agent": "b_agent"},
+            ]),
+            (3, 6.0, [
+                {"plan_offset": 10, "agent": "a_agent"},
+                {"plan_offset": 30, "agent": "b_agent"},
+                {"plan_offset": 50, "agent": "a_agent"},
+            ]),
+        )
+    ]
+    monitor._final_ids = torch.tensor([1, 2, 3])
+    monitor._reasoning_payload_ids = torch.tensor([])
+    monitor._plan_payload_ids = torch.tensor([])
+    monitor._reasoning_text = ""
+    monitor._plan_text = ""
+    monitor._json_end = None
+    monitor._fixed_reference = []
+    monitor._final_plan = None
+    monitor.agent_observer = types.SimpleNamespace(metrics=lambda: {
+        "agent_slots": [
+            {
+                "shadow_agent": "a_agent", "shadow_seconds": 2.0,
+                "shadow_step": 1, "shadow_anchor_offset": 10,
+                "shadow_probability": 0.95, "shadow_margin": 0.8,
+            },
+            {
+                "shadow_agent": "b_agent", "shadow_seconds": 3.0,
+                "shadow_step": 2, "shadow_anchor_offset": 30,
+                "shadow_probability": 0.95, "shadow_margin": 0.8,
+            },
+            {
+                "shadow_agent": local_third,
+                "shadow_seconds": local_third_seconds,
+                "shadow_step": 3, "shadow_anchor_offset": 50,
+                "shadow_probability": 0.95, "shadow_margin": 0.8,
+            },
+        ]
+    })
+    return monitor.metrics()
+
+
+def test_all_local_fusion_uses_natural_zero_lag_fallback_and_never_lags():
+    metrics = _fusion_metrics(local_third_seconds=7.0)
+    assert [slot["prefetch_source"] for slot in metrics["agent_slots"]] == [
+        "local", "local", "natural"
+    ]
+    assert metrics["T_first3_plan"] == 6.0
+    assert metrics["T_first3_all"] == 6.0
+    assert metrics["prediction_incremental_lead"] == 0.0
+    assert metrics["all_not_later_than_plan"] is True
+
+
+def test_all_reports_correct_incremental_lead_and_wrong_correction_cost():
+    correct = _fusion_metrics()
+    assert correct["all_first3_speculative_exact"] is True
+    assert correct["local_first3_coverage"] is True
+    assert correct["local_first3_exact"] is True
+    assert correct["T_first3_all"] == 4.0
+    assert correct["correct_first3_lead"] == 2.0
+
+    wrong = _fusion_metrics(local_third="c_agent")
+    slot3 = wrong["agent_slots"][2]
+    assert wrong["all_first3_speculative_exact"] is False
+    assert wrong["local_first3_exact"] is False
+    assert wrong["correct_first3_lead"] is None
+    assert slot3["wrong_prefetch"] is True
+    assert slot3["T_correction"] == 6.0
+    assert slot3["wrong_prefetch_duration"] == 2.0
 
 
 def test_schema_valid_json_and_dynamic_end_compact_plan_capacity():

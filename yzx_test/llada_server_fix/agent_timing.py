@@ -20,7 +20,7 @@ LOGGER = logging.getLogger("fastdllm.agent_timing")
 class AgentTimingRecorder:
     """Keep one latest compact JSONL record per model/query/method."""
 
-    schema_version = 3
+    schema_version = 4
 
     def __init__(self, log_path: str) -> None:
         if not log_path:
@@ -61,9 +61,9 @@ class AgentTimingRecorder:
             (slot.get("prefetched_agent"), slot.get("T_slot_prefetch"),
              slot.get("prefetch_source")),
             (slot.get("predicted_agent"), slot.get("predicted_seconds"),
-             "plan_region_observer"),
+             "local"),
             (slot.get("shadow_agent"), slot.get("shadow_seconds"),
-             "plan_region_observer"),
+             "local"),
             (slot.get("committed_agent"), slot.get("committed_seconds"),
              "commit"),
         )
@@ -94,11 +94,33 @@ class AgentTimingRecorder:
         return {"slot": slot.get("slot"), "agent": str(agent),
                 "seconds": float(seconds)}
 
+    @staticmethod
+    def _slot_fusion(slot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if (
+            slot.get("T_fused_prefetch") is None
+            and slot.get("T_natural_decode") is None
+        ):
+            return None
+        fields = (
+            "slot", "T_first_local_evidence", "T_local_prediction",
+            "T_natural_decode",
+            "T_fused_prefetch", "predicted_agent", "natural_agent",
+            "prediction_correct", "source", "local_lead", "fused_lead",
+            "local_observation_count_before_natural",
+            "wrong_prefetch", "T_correction", "wrong_prefetch_duration",
+            "corrected_agent",
+        )
+        return {field: slot.get(field) for field in fields}
+
     @classmethod
     def _compact_record(cls, record: Dict[str, Any]) -> Dict[str, Any]:
         slots = record.get("agents") or []
-        predicted = [cls._slot_prediction(slot) for slot in slots]
-        natural = [cls._slot_natural(slot) for slot in slots]
+        predicted = record.get("predicted_agents")
+        if predicted is None:
+            predicted = [cls._slot_prediction(slot) for slot in slots]
+        natural = record.get("natural_agents")
+        if natural is None:
+            natural = [cls._slot_natural(slot) for slot in slots]
         predicted = [row for row in predicted if row is not None]
         natural = [row for row in natural if row is not None]
         method = record.get("method") or record.get("policy") or "base"
@@ -124,6 +146,7 @@ class AgentTimingRecorder:
             "error": record.get("error"),
             "predicted_agents": predicted,
             "natural_agents": natural,
+            "agent_fusion": record.get("agent_fusion") or [],
             "first3_prediction_seconds": max(
                 (row["seconds"] for row in predicted[:3]), default=None
             ) if len(predicted) >= 3 else None,
@@ -132,8 +155,55 @@ class AgentTimingRecorder:
             ) if len(natural) >= 3 else None,
             "all_natural_seconds": max(
                 (row["seconds"] for row in natural), default=None),
+            "agent_count": record.get("agent_count", len(natural)),
+            "first_agent_seconds": record.get("first_agent_seconds"),
             "generation_seconds": record.get("generation_seconds"),
             "nfe": record.get("nfe"),
+            "final_plan_parse_success": record.get(
+                "final_plan_parse_success"
+            ),
+            "plan_end_natural_success": record.get(
+                "plan_end_natural_success"
+            ),
+            "reasoning_end_natural_success": record.get(
+                "reasoning_end_natural_success"
+            ),
+            "plan_capacity_exhausted": record.get(
+                "plan_capacity_exhausted"
+            ),
+            "reasoning_capacity_exhausted": record.get(
+                "reasoning_capacity_exhausted"
+            ),
+            "unresolved_mask_count": record.get("unresolved_mask_count"),
+            "local_observation_stride": record.get(
+                "local_observation_stride"
+            ),
+            "local_agent_probability": record.get(
+                "local_agent_probability"
+            ),
+            "local_observer_warmup_calls": record.get(
+                "local_observer_warmup_calls"
+            ),
+            "local_observer_refinement_calls": record.get(
+                "local_observer_refinement_calls"
+            ),
+            "local_observer_wall_time": record.get(
+                "local_observer_wall_time"
+            ),
+            "T_first3_plan": record.get("T_first3_plan"),
+            "T_first3_all": record.get("T_first3_all"),
+            "all_first3_speculative_exact": record.get(
+                "all_first3_speculative_exact"
+            ),
+            "local_first3_coverage": record.get("local_first3_coverage"),
+            "local_first3_exact": record.get("local_first3_exact"),
+            "correct_first3_lead": record.get("correct_first3_lead"),
+            "prediction_incremental_lead": record.get(
+                "prediction_incremental_lead"
+            ),
+            "wrong_speculative_rate": record.get("wrong_speculative_rate"),
+            "natural_fallback_rate": record.get("natural_fallback_rate"),
+            "all_not_later_than_plan": record.get("all_not_later_than_plan"),
         }
 
     def _read_records_from_disk(self) -> List[Dict[str, Any]]:
@@ -205,8 +275,10 @@ class AgentTimingRecorder:
         slots = priority.get("agent_slots") or []
         predicted = [self._slot_prediction(slot) for slot in slots]
         natural = [self._slot_natural(slot) for slot in slots]
+        fusion = [self._slot_fusion(slot) for slot in slots]
         predicted = [row for row in predicted if row is not None]
         natural = [row for row in natural if row is not None]
+        fusion = [row for row in fusion if row is not None]
         natural_by_slot = {row["slot"]: row for row in natural}
         for row in predicted:
             expected = natural_by_slot.get(row["slot"])
@@ -230,6 +302,7 @@ class AgentTimingRecorder:
             "error": error,
             "predicted_agents": predicted,
             "natural_agents": natural,
+            "agent_fusion": fusion,
             "first3_prediction_seconds": max(
                 (row["seconds"] for row in predicted[:3]), default=None
             ) if len(predicted) >= 3 else None,
@@ -238,9 +311,89 @@ class AgentTimingRecorder:
             ) if len(natural) >= 3 else None,
             "all_natural_seconds": max(
                 (row["seconds"] for row in natural), default=None),
+            "agent_count": len(natural),
+            "first_agent_seconds": priority.get("first_agent_seconds"),
             "generation_seconds": metrics.get("generation_seconds"),
             "nfe": metrics.get("nfe"),
+            "final_plan_parse_success": priority.get(
+                "final_plan_parse_success"
+            ),
+            "plan_end_natural_success": priority.get(
+                "plan_end_natural_success"
+            ),
+            "reasoning_end_natural_success": priority.get(
+                "reasoning_end_natural_success"
+            ),
+            "plan_capacity_exhausted": priority.get(
+                "plan_capacity_exhausted"
+            ),
+            "reasoning_capacity_exhausted": priority.get(
+                "reasoning_capacity_exhausted"
+            ),
+            "unresolved_mask_count": priority.get(
+                "unresolved_mask_count", metrics.get("unresolved_mask_count")
+            ),
+            "local_observation_stride": priority.get(
+                "local_observation_stride"
+            ),
+            "local_agent_probability": priority.get(
+                "local_agent_probability"
+            ),
+            "local_observer_warmup_calls": priority.get(
+                "local_observer_warmup_calls"
+            ),
+            "local_observer_refinement_calls": priority.get(
+                "local_observer_refinement_calls"
+            ),
+            "local_observer_wall_time": priority.get(
+                "local_observer_wall_time"
+            ),
+            "T_first3_plan": priority.get("T_first3_plan"),
+            "T_first3_all": priority.get("T_first3_all"),
+            "all_first3_speculative_exact": priority.get(
+                "all_first3_speculative_exact"
+            ),
+            "local_first3_coverage": priority.get("local_first3_coverage"),
+            "local_first3_exact": priority.get("local_first3_exact"),
+            "correct_first3_lead": priority.get("correct_first3_lead"),
+            "prediction_incremental_lead": priority.get(
+                "prediction_incremental_lead"
+            ),
+            "wrong_speculative_rate": priority.get("wrong_speculative_rate"),
+            "natural_fallback_rate": priority.get("natural_fallback_rate"),
+            "all_not_later_than_plan": priority.get("all_not_later_than_plan"),
         }
+        if method == "plan":
+            # Large-scale PLAN runs deliberately use a narrow schema.  Do not
+            # serialize empty prediction/fusion fields or ablation-only data.
+            plan_fields = (
+                "schema_version", "session_id", "request_key",
+                "request_index", "attempt_count", "first_created_unix",
+                "completion_id", "created_unix", "query", "query_sha256",
+                "model", "method", "status", "error", "natural_agents",
+                "agent_count", "generation_seconds", "nfe",
+                "final_plan_parse_success", "plan_end_natural_success",
+                "reasoning_end_natural_success", "plan_capacity_exhausted",
+                "reasoning_capacity_exhausted", "unresolved_mask_count",
+            )
+            record = {field: record.get(field) for field in plan_fields}
+        elif method == "commit":
+            # Large-scale commit runs need only the speculative Agent/time,
+            # authoritative natural Agent/time, and request-level generation
+            # health.  All First-3/all-Agent aggregates are derivable from the
+            # two occurrence lists and are intentionally not persisted.
+            commit_fields = (
+                "schema_version", "session_id", "request_key",
+                "request_index", "attempt_count", "first_created_unix",
+                "completion_id", "created_unix", "query", "query_sha256",
+                "model", "method", "status", "error",
+                "predicted_agents", "natural_agents", "agent_count",
+                "generation_seconds", "nfe", "final_plan_parse_success",
+                "plan_end_natural_success", "reasoning_end_natural_success",
+                "plan_capacity_exhausted", "reasoning_capacity_exhausted",
+                "unresolved_mask_count",
+            )
+            record = {field: record.get(field) for field in commit_fields}
         with self._lock:
             previous = self._records.get(request_key)
             if previous is None:

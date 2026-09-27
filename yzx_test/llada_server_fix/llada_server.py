@@ -10,6 +10,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import torch
@@ -28,7 +29,6 @@ from fixed_canvas import NaturalReasoningPlanMonitor
 from json_agent_priority import extract_agent_registry
 from model.modeling_llada import LLaDAModelLM
 from planner_json_repair import repair_plan_json_response
-from planner_policy import apply_planner_prompt_policy
 from response_agent_timing import infer_benchmark
 
 
@@ -47,6 +47,13 @@ KNOWN_AGENT_NAMES = [
     "math_agent",
     "commonsense_agent",
 ]
+
+DEFAULT_AGENT_TIMING_LOG_DIR = str(
+    Path(__file__).resolve().parent.parent
+    / "benchmarks"
+    / "fastdllm_log"
+    / "llada_server_fix"
+)
 
 
 class ContentPart(BaseModel):
@@ -93,9 +100,8 @@ class ServerConfig:
     cache_mode: str
     threshold: float
     agent_anchor_margin: float
-    agent_timing_log_path: str
+    agent_timing_log_dir: str
     plan_json_repair: bool
-    policy: str
     api_key: Optional[str]
     structure_mode: str
     reasoning_budget: Optional[int]
@@ -109,6 +115,8 @@ class ServerConfig:
     fusion_local_stable: int
     fusion_local_probability: float
     fusion_local_margin: float
+    local_observation_stride: int
+    all_local_probability: float
 
 
 class LLaDAPlannerRuntime:
@@ -118,7 +126,18 @@ class LLaDAPlannerRuntime:
         self.tokenizer = None
         self.model = None
         self.lock = None
-        self.timing_recorder = AgentTimingRecorder(config.agent_timing_log_path)
+        self.timing_recorders: Dict[str, AgentTimingRecorder] = {}
+
+    def _timing_recorder(self, benchmark: str) -> AgentTimingRecorder:
+        recorder = self.timing_recorders.get(benchmark)
+        if recorder is None:
+            log_path = (
+                Path(self.config.agent_timing_log_dir)
+                / f"{benchmark}_full_timings.jsonl"
+            )
+            recorder = AgentTimingRecorder(str(log_path))
+            self.timing_recorders[benchmark] = recorder
+        return recorder
 
     def load(self):
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -178,17 +197,28 @@ class LLaDAPlannerRuntime:
         metrics: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> None:
-        query = next(
-            (
-                self.message_content_to_text(message)
-                for message in reversed(request.messages)
-                if message.role == "user"
-            ),
-            "",
-        )
-        requested_tokens = request.max_completion_tokens or request.max_tokens
         try:
-            self.timing_recorder.record(
+            messages = self.prepare_messages(request.messages)
+            registry = extract_agent_registry(messages, self.config.agent_names)
+            benchmark = infer_benchmark(registry)
+            if benchmark is None:
+                logging.getLogger("fastdllm.agent_timing").warning(
+                    "Skipping Agent timing: unrecognized Agent registry %s",
+                    registry,
+                )
+                return
+            query = next(
+                (
+                    str(message.get("content") or "")
+                    for message in reversed(messages)
+                    if message.get("role") == "user"
+                ),
+                "",
+            )
+            requested_tokens = (
+                request.max_completion_tokens or request.max_tokens
+            )
+            self._timing_recorder(benchmark).record(
                 completion_id=completion_id,
                 created_unix=created,
                 query=query,
@@ -256,14 +286,6 @@ class LLaDAPlannerRuntime:
                 "as '- name_agent: description' lines or start the server with "
                 "--agent_names."
             )
-        # planreason is the former ``now`` policy. reasonplan returns an
-        # equivalent copy here, leaving the caller's reasoning-first prompt free
-        # of contradictory server-side ordering instructions.
-        messages = apply_planner_prompt_policy(
-            messages,
-            self.config.policy,
-            request_agent_names,
-        )
         rendered_prompt = self.tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -290,7 +312,10 @@ class LLaDAPlannerRuntime:
                 reasoning_ratio=self.config.reasoning_ratio,
                 plan_ratio=self.config.plan_ratio,
                 structure_mode=fixed_structure_mode,
-                agent_commit=self.config.method == "all",
+                local_agent_observe=self.config.method == "all",
+                local_observation_stride=self.config.local_observation_stride,
+                local_agent_probability=self.config.all_local_probability,
+                lightweight_tracking=self.config.method == "plan",
             )
         elif self.config.method == "commit":
             controller = DualVanillaLateDecideObserver(
@@ -373,11 +398,7 @@ class LLaDAPlannerRuntime:
             "method": "disabled",
             "operations": [],
         }
-        if self.config.plan_json_repair and self.config.policy in {
-            "mid",
-            "planreason",
-            "reasonplan",
-        }:
+        if self.config.plan_json_repair:
             content, repair_report = repair_plan_json_response(
                 content,
                 request_agent_names,
@@ -699,22 +720,15 @@ def parse_args():
         default=-6.0,
         help="Minimum mean target-vs-top logit margin for a speculative JSON Agent anchor.",
     )
-    parser.add_argument(
-        "--policy",
-        choices=("raw", "mid", "planreason", "reasonplan"),
-        default="planreason",
-        help=(
-            "Prompt formatting policy only. Decoding behavior is selected by "
-            "--method. Use reasonplan with the current reasoning-first prompt."
-        ),
-    )
     parser.add_argument("--api_key", default=None)
     parser.add_argument("--log_level", default="info")
     parser.add_argument(
-        "--agent_timing_log_path",
-        default="agent_timings.jsonl",
+        "--agent_timing_log_dir",
+        "--agent-timing-log-dir",
+        default=DEFAULT_AGENT_TIMING_LOG_DIR,
         help=(
-            "Canonical JSONL file with the latest Agent timing record per request."
+            "Directory for {benchmark}_full_timings.jsonl files. The benchmark "
+            "is inferred from the request Agent registry."
         ),
     )
     parser.add_argument("--fusion-global-stable", type=int, default=2)
@@ -723,6 +737,26 @@ def parse_args():
     parser.add_argument("--fusion-local-stable", type=int, default=2)
     parser.add_argument("--fusion-local-prob", type=float, default=0.75)
     parser.add_argument("--fusion-local-margin", type=float, default=0.15)
+    parser.add_argument(
+        "--local-observation-stride",
+        type=int,
+        default=1,
+        help=(
+            "For --method all, score existing PLAN block-local logits only "
+            "every N refinement steps. Full block warmup observations remain "
+            "enabled; this never adds a model forward."
+        ),
+    )
+    parser.add_argument(
+        "--all-local-prob",
+        type=float,
+        default=0.90,
+        help=(
+            "Probability threshold for the read-only PLAN-local predictor "
+            "used only by --method all. The margin remains 0.40 and stable "
+            "count remains 2."
+        ),
+    )
     parser.add_argument(
         "--plan_json_repair",
         action=argparse.BooleanOptionalAction,
@@ -746,6 +780,10 @@ def main():
     )
     if args.fusion_global_stable < 1 or args.fusion_local_stable < 1:
         raise ValueError("Fusion stability counts must be positive.")
+    if args.local_observation_stride < 1:
+        raise ValueError("--local-observation-stride must be at least 1.")
+    if not 0.0 <= args.all_local_prob <= 1.0:
+        raise ValueError("--all-local-prob must be within [0,1].")
     for name in (
         "fusion_global_prob", "fusion_global_margin",
         "fusion_local_prob", "fusion_local_margin",
@@ -764,6 +802,8 @@ def main():
         raise ValueError("plan_budget must be positive when provided.")
     if args.reasoning_ratio <= 0 or args.plan_ratio <= 0:
         raise ValueError("reasoning_ratio and plan_ratio must be positive.")
+    if not str(args.agent_timing_log_dir).strip():
+        raise ValueError("agent_timing_log_dir cannot be empty.")
 
     runtime = LLaDAPlannerRuntime(
         ServerConfig(
@@ -779,9 +819,8 @@ def main():
             cache_mode=args.cache_mode,
             threshold=args.threshold,
             agent_anchor_margin=args.agent_anchor_margin,
-            agent_timing_log_path=args.agent_timing_log_path,
+            agent_timing_log_dir=args.agent_timing_log_dir,
             plan_json_repair=args.plan_json_repair,
-            policy=args.policy,
             api_key=args.api_key,
             structure_mode=args.structure_mode,
             reasoning_budget=args.reasoning_budget,
@@ -795,6 +834,8 @@ def main():
             fusion_local_stable=args.fusion_local_stable,
             fusion_local_probability=args.fusion_local_prob,
             fusion_local_margin=args.fusion_local_margin,
+            local_observation_stride=args.local_observation_stride,
+            all_local_probability=args.all_local_prob,
         )
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)

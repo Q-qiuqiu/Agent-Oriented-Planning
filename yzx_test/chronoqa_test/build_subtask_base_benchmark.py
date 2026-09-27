@@ -12,10 +12,13 @@ from build_subtask_benchmark import (
     normalize_plan,
     print_summary,
 )
-from build_subtask_full_benchmark import FULL_PLANNER_PROMPT
+# Use the v2 long-reasoning prompt (one ~2-sentence paragraph per agent plus a
+# synthesis paragraph) so the reasoning length matches the base_lladav1 /
+# base_llama3 v2 runs; only the PREFETCH_AGENTS prefix is added on top.
+from build_subtask_full_benchmark_v2 import FULL_PLANNER_PROMPT
 
 
-PROMPT_VERSION = "chronoqa_base_llama3_prefetch_reasoning_plan_v5"
+PROMPT_VERSION = "chronoqa_base_llama3_prefetch_reasoning_plan_v6_3sent"
 
 BASE_LLAMA3_PROMPT = build_prefetch_reasoning_plan_prompt(
     FULL_PLANNER_PROMPT,
@@ -24,8 +27,8 @@ BASE_LLAMA3_PROMPT = build_prefetch_reasoning_plan_prompt(
 
 CONFIG = {
     "input": "benchmarks/chronoqa/chronoqa_sampled.json",
-    "plans_output": "benchmarks/chronoqa/chronoqa_plans_base_llama3.json",
-    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_base_llama3.json",
+    "plans_output": "benchmarks/chronoqa/chronoqa_plans_base_llama3_agentfirst.json",
+    "benchmark_output": "benchmarks/chronoqa/chronoqa_subtask_base_llama3_agentfirst.json",
     "planner_api_url": "http://10.137.144.97:7002/v1",
     "planner_api_key": "empty",
     "planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",

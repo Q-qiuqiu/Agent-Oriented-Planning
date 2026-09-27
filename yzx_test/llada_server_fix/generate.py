@@ -537,6 +537,7 @@ def generate_with_fixed_canvas_dual_cache(
     nfe = 0
     global_step = 0
     schedule_log = []
+    record_schedule = not getattr(agent_controller, "lightweight_tracking", False)
     schedule_round = 0
 
     for phase in phases:
@@ -554,15 +555,16 @@ def generate_with_fixed_canvas_dual_cache(
             allowed_full = agent_controller.decoder_mask(allowed_full)
             initial_masks = int(allowed_full.sum().item())
             if initial_masks == 0:
-                schedule_log.append({
-                    "round": schedule_round,
-                    "phase": phase,
-                    "physical_block": block_id,
-                    "initial_masks": 0,
-                    "remaining_masks": 0,
-                    "local_steps": 0,
-                    "skipped": True,
-                })
+                if record_schedule:
+                    schedule_log.append({
+                        "round": schedule_round,
+                        "phase": phase,
+                        "physical_block": block_id,
+                        "initial_masks": 0,
+                        "remaining_masks": 0,
+                        "local_steps": 0,
+                        "skipped": True,
+                    })
                 schedule_round += 1
                 continue
 
@@ -580,11 +582,8 @@ def generate_with_fixed_canvas_dual_cache(
                     logits_start=0,
                     global_step=global_step,
                 )
-                # During reasoning, ordinary transfer remains reasoning-only;
-                # the controller may nevertheless commit exact Agent-value
-                # tokens in the known future PLAN region. Rebuild the active
-                # phase mask so committed spans stay frozen without opening
-                # any other PLAN position to transfer.
+                # Observation is strictly read-only. Rebuild the active mask
+                # only because Dynamic END may have shortened the PLAN region.
                 region_mask = layout.bool_mask(x, phase)
                 allowed_full = (x == mask_id) & region_mask
                 allowed_full[:, :block_start] = False
@@ -643,7 +642,7 @@ def generate_with_fixed_canvas_dual_cache(
                 nfe += 1
                 if (
                     phase == "plan"
-                    and getattr(agent_controller, "agent_commit", False)
+                    and agent_controller.should_observe_local_step(local_step)
                 ):
                     agent_controller.observe_plan_logits(
                         logits_block,
@@ -693,26 +692,29 @@ def generate_with_fixed_canvas_dual_cache(
             # No cache built against the pre-compaction coordinates may cross
             # this visit or phase boundary.
             del past_key_values
-            if completed_this_visit:
-                remaining = 0
-            else:
-                region_mask = layout.bool_mask(x, phase)
-                remaining = int((
-                    (x[:, block_start:min(block_end, x.shape[1])] == mask_id)
-                    & region_mask[:, block_start:min(block_end, x.shape[1])]
-                ).sum().item())
-            schedule_log.append({
-                "round": schedule_round,
-                "phase": phase,
-                "physical_block": block_id,
-                "initial_masks": initial_masks,
-                "remaining_masks": remaining,
-                "local_steps": local_steps,
-                "skipped": False,
-                "end_marker_found": agent_controller.marker_offsets[phase] is not None,
-                "phase_compacted": completed_this_visit,
-                "phase_valid": agent_controller.phase_valid[phase],
-            })
+            if record_schedule:
+                if completed_this_visit:
+                    remaining = 0
+                else:
+                    region_mask = layout.bool_mask(x, phase)
+                    remaining = int((
+                        (x[:, block_start:min(block_end, x.shape[1])] == mask_id)
+                        & region_mask[:, block_start:min(block_end, x.shape[1])]
+                    ).sum().item())
+                schedule_log.append({
+                    "round": schedule_round,
+                    "phase": phase,
+                    "physical_block": block_id,
+                    "initial_masks": initial_masks,
+                    "remaining_masks": remaining,
+                    "local_steps": local_steps,
+                    "skipped": False,
+                    "end_marker_found": (
+                        agent_controller.marker_offsets[phase] is not None
+                    ),
+                    "phase_compacted": completed_this_visit,
+                    "phase_valid": agent_controller.phase_valid[phase],
+                })
             schedule_round += 1
             if phase_finished:
                 break
@@ -724,7 +726,8 @@ def generate_with_fixed_canvas_dual_cache(
             if agent_controller.phase_remaining_masks(x, phase) == 0:
                 agent_controller.mark_capacity_exhausted(phase)
 
-    agent_controller.schedule_log = schedule_log
+    if record_schedule:
+        agent_controller.schedule_log = schedule_log
     agent_controller.finalize(x)
     return x, nfe
 

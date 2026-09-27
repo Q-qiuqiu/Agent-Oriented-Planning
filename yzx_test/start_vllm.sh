@@ -192,12 +192,12 @@ register_model \
 register_model \
     "llama3-1b" \
     "/data/labshare/Param/llama/llama3/Llama-3.2-1B-Instruct" \
-    "7021" "1" "16384" "0.3" \
+    "7021" "1" "16384" "0.45" \
     "hermes" "true" "false" ""
 register_model \
     "gemma3-1b" \
     "/data/labshare/Param/gemma-3-1b-it" \
-    "7022" "1" "16384" "0.4" \
+    "7022" "1" "16384" "0.45" \
     "hermes" "true" "false" ""
 register_model \
     "qwen3-1.7b" \
@@ -214,40 +214,40 @@ register_model \
 register_model \
     "lfm2.5-1.2b" \
     "/data/labshare/Param/LFM2.5-1.2B-Instruct" \
-    "7025" "1" "8192" "0.4" \
+    "7025" "1" "8192" "0.45" \
     "hermes" "true" "false" ""
 register_model \
     "minicpm5-1b" \
     "/data/labshare/Param/MiniCPM5-1B" \
-    "7026" "1" "16384" "0.3" \
+    "7026" "1" "16384" "0.45" \
     "" "false" "false" \
     "--chat-template /data/labshare/Param/MiniCPM5-1B/minicpm5_nonthinking.jinja"
 register_model \
     "deepseekr1-1.5b" \
     "/data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B" \
-    "7027" "1" "16384" "0.4" \
+    "7027" "1" "16384" "0.45" \
     "" "false" "false" \
     "--chat-template /data/labshare/Param/DeepSeek-R1-Distill-Qwen-1.5B/deepseek_nonthinking.jinja"
 register_model \
     "qwen2.5-math-1.5b" \
     "/data/labshare/Param/Qwen/Qwen2.5-Math-1.5B-Instruct" \
-    "7028" "1" "4096" "0.3" \
+    "7028" "1" "4096" "0.45" \
     "" "false" "false" ""
 register_model \
     "qwen2.5-coder-1.5b" \
     "/data/labshare/Param/Qwen/Qwen2.5-Coder-1.5B-Instruct" \
-    "7029" "1" "16384" "0.3" \
+    "7029" "1" "16384" "0.45" \
     "" "false" "false" ""
 register_model \
     "internlm2.5-1.8b" \
     "/data/labshare/Param/internlm2_5-1_8b-chat" \
-    "7030" "1" "16384" "0.4" \
+    "7030" "1" "16384" "0.45" \
     "" "false" "false" \
     "--trust-remote-code"
 register_model \
     "smollm2-1.7b" \
     "/data/labshare/Param/SmolLM2-1.7B-Instruct" \
-    "7031" "1" "8192" "0.4" \
+    "7031" "1" "8192" "0.45" \
     "" "false" "false" ""
 # ============================================================
 # Per-model Conda environment mapping
