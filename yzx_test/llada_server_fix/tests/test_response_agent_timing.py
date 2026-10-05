@@ -1,5 +1,6 @@
 import torch
 
+from fixed_canvas import NaturalReasoningPlanMonitor
 from json_agent_priority import JsonAgentPriorityConfig
 from response_agent_timing import PassiveJsonAgentMonitor, infer_benchmark
 
@@ -148,3 +149,73 @@ def test_agent_fields_outside_plan_json_are_not_recorded():
         if slot["agent"] is not None
     ]
     assert recognized == ["temporal_agent"]
+
+
+def test_direct_json_dynamically_tracks_more_than_three_agent_fields():
+    tokenizer = CharacterTokenizer()
+    text = (
+        '[{"agent":"search_agent"},'
+        '{"agent":"search_agent"},'
+        '{"agent":"calculation_agent"},'
+        '{"agent":"calculation_agent"}]'
+    )
+    monitor = PassiveJsonAgentMonitor(
+        tokenizer=tokenizer,
+        config=JsonAgentPriorityConfig(
+            catalog=("search_agent", "calculation_agent", "reasoning_agent"),
+            priority_slots=1,
+            tracking_slots=1,
+        ),
+        prompt_length=1,
+        gen_length=len(text),
+        mask_id=tokenizer.mask_token_id,
+    )
+    x = torch.full(
+        (1, 1 + len(text)), tokenizer.mask_token_id, dtype=torch.long
+    )
+    x[0, 1:] = torch.tensor(tokenizer.encode(text))
+    monitor.initialize(x)
+    monitor.observe(None, x, 0, 4)
+
+    slots = monitor.metrics()["agent_slots"]
+    assert [slot["agent"] for slot in slots] == [
+        "search_agent",
+        "search_agent",
+        "calculation_agent",
+        "calculation_agent",
+    ]
+
+
+def test_base_monitor_returns_only_dynamic_natural_agent_rows():
+    tokenizer = CharacterTokenizer()
+    text = (
+        '[{"agent":"search_agent"},'
+        '{"agent":"search_agent"},'
+        '{"agent":"calculation_agent"},'
+        '{"agent":"reasoning_agent"}]'
+    )
+    monitor = NaturalReasoningPlanMonitor(
+        tokenizer=tokenizer,
+        catalog=("search_agent", "calculation_agent", "reasoning_agent"),
+        prompt_length=1,
+        gen_length=len(text),
+        mask_id=tokenizer.mask_token_id,
+    )
+    x = torch.full(
+        (1, 1 + len(text)), tokenizer.mask_token_id, dtype=torch.long
+    )
+    x[0, 1:] = torch.tensor(tokenizer.encode(text))
+    before = x.clone()
+    monitor.initialize(x)
+    monitor.observe(None, x, 0, 5)
+
+    metrics = monitor.metrics()
+    assert torch.equal(x, before)
+    assert set(metrics) == {
+        "policy", "structure_mode", "timing_source", "read_only",
+        "agent_count", "agent_slots",
+    }
+    assert metrics["agent_count"] == 4
+    assert [slot["agent"] for slot in metrics["agent_slots"]] == [
+        "search_agent", "search_agent", "calculation_agent", "reasoning_agent",
+    ]

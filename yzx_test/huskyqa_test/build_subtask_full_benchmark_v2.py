@@ -15,85 +15,18 @@ from build_subtask_benchmark import (
 from prompt import planner_prompt
 
 
-# v3 = base_llada detection-slowdown variant: identical rules, markers and
-# JSON schema, but the PLANNING_REASONING instruction now demands one detailed
-# paragraph per selected agent plus a synthesis paragraph, so the PLAN_JSON
-# block (and therefore the "agent":" anchors the timing monitor detects)
-# starts much later in the response.
-FULL_PROMPT_VERSION = "huskyqa_full_reasoning_first_long_v3_3sent"
-
-FULL_OUTPUT_BLOCK = """Use the same decomposition, agent selection, dependencies,
-and JSON plan that you would produce under the original instructions. The only
-additional requirement is to output the planning reasoning before that JSON.
-
-PLANNING_REASONING
-Explain the reasoning that led to the plan in depth. For EACH agent you
-selected, write one paragraph of about two sentences describing
-the perspective it contributes, the method and kind of evidence it relies on,
-and why that angle alone is insufficient without the other selected agents.
-Then finish with one synthesis paragraph explaining how the selected views
-complement each other and why this decomposition fits the question. This is
-an additional explanation, not a different planning task. Do not solve the
-subtasks in this section and do not introduce any agent-selection or
-decomposition rules beyond the original instructions. Do not put JSON or
-Markdown code fences in this section.
-END_PLANNING_REASONING
-
-PLAN_JSON
-[
-  {
-    "agent": "search_agent",
-    "id": 1,
-    "task": "subtask description",
-    "reason": "why this agent is suitable",
-    "dep": []
-  }
-]
-END_PLAN_JSON
-"""
-
-
-def remove_json_example(prompt, introduction):
-    if introduction not in prompt:
-        raise ValueError("HuskyQA planner prompt JSON introduction was not found")
-    prefix, remainder = prompt.split(introduction, 1)
-    array_start = None
-    array_end = None
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\[", remainder):
-        try:
-            value, end = decoder.raw_decode(remainder[match.start():])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, list) and value and all(isinstance(item, dict) for item in value):
-            array_start = match.start()
-            array_end = end
-            break
-    if array_start is None:
-        raise ValueError("HuskyQA planner prompt JSON example was not found")
-    before_example = remainder[:array_start]
-    suffix = remainder[array_start + array_end:]
-    return f"{prefix.rstrip()}\n\n{before_example.strip()}\n{suffix.strip()}"
-
-
-BASE_FULL_INSTRUCTIONS = remove_json_example(
-    planner_prompt,
-    "Output only one valid JSON array in this exact schema. This example shows two\n"
-    "independent retrievals followed by one consolidated calculation:",
-).replace(
-    "- Do not include analysis, markdown fences, comments, or text outside the array.",
-    "- Follow the marked response format below exactly.",
-)
-
-FULL_PLANNER_PROMPT = BASE_FULL_INSTRUCTIONS + "\n\n" + FULL_OUTPUT_BLOCK
+# Keep this public name because the server and experiment scripts import it.
+# The planner now emits the plan array directly; there is no reasoning wrapper.
+FULL_PROMPT_VERSION = "huskyqa_direct_json_rationale_2to3_sentences_v6"
+FULL_PLANNER_PROMPT = planner_prompt
 
 
 # Edit these defaults directly before running the script.
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
-    "plans_output": "benchmarks/huskyqa/huskyqa_plans_full_llada_commit.json",
-    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_full_llada_commit.json",
-    "planner_api_url": "http://10.137.144.97:7007/v1",
+    "plans_output": "benchmarks/huskyqa/huskyqa_plans_full_llada_base.json",
+    "benchmark_output": "benchmarks/huskyqa/huskyqa_subtask_full_llada_base.json",
+    "planner_api_url": "http://10.137.144.97:7009/v1",
     "planner_api_key": "empty",
     #"planner_model": "/data/labshare/Param/llama/llama3/Meta-Llama-3-8B-Instruct",
     "planner_model": "/data/labshare/Param/llada",
@@ -101,7 +34,6 @@ CONFIG = {
     "planner_max_tokens": 1024,
     "timeout": 600,
     "limit": None,
-    "retry_missing_reasoning": False,
     "agents": AGENTS,
 }
 
@@ -177,21 +109,6 @@ def extract_json_array(text):
     raise ValueError("Cannot find plan JSON in planner output")
 
 
-def extract_planning_reasoning(text):
-    start_marker = "PLANNING_REASONING"
-    end_marker = "END_PLANNING_REASONING"
-    start = text.find(start_marker)
-    if start < 0:
-        return None
-    start += len(start_marker)
-    end = text.find(end_marker, start)
-    if end < 0:
-        end = text.find("PLAN_JSON", start)
-    if end < 0:
-        return None
-    return text[start:end].strip(" \n:\t") or None
-
-
 def normalize_plan(plan):
     return normalize_standard_plan(plan)
 
@@ -222,18 +139,12 @@ def build_plans(queries, config):
         if item.get("error") is None
         and item.get("plan")
         and item.get("planner_prompt_version") == FULL_PROMPT_VERSION
-        and (
-            not config["retry_missing_reasoning"]
-            or item.get("planning_reasoning")
-        )
     }
     if existing_by_index:
         print(
             f"resume | loaded={len(existing_by_index)} "
             f"| completed={len(done)} "
-            f"| prompt_version={FULL_PROMPT_VERSION} "
-            f"| retry_missing_reasoning="
-            f"{config['retry_missing_reasoning']}",
+            f"| prompt_version={FULL_PROMPT_VERSION}",
             flush=True,
         )
 
@@ -249,7 +160,7 @@ def build_plans(queries, config):
             "query": row["query"],
             "answer": row.get("answer"),
             "planner_model": config["planner_model"],
-            "planner_mode": "reasoning_long_then_json",
+            "planner_mode": "direct_json",
             "planner_prompt_version": FULL_PROMPT_VERSION,
         }
         try:
@@ -263,23 +174,16 @@ def build_plans(queries, config):
                 config["timeout"],
             )
             plan = normalize_plan(extract_json_array(raw_output))
-            reasoning = extract_planning_reasoning(raw_output)
-            warnings = [] if reasoning else ["missing planning reasoning section"]
             record.update(
                 {
-                    "planning_reasoning": reasoning,
                     "raw_plan": raw_output,
                     "plan": plan,
-                    "format_warnings": warnings,
                     "error": None,
                 }
             )
         except Exception as exc:
             record.update(
                 {
-                    "planning_reasoning": (
-                        extract_planning_reasoning(raw_output) if raw_output else None
-                    ),
                     "raw_plan": raw_output,
                     "plan": None,
                     "error": str(exc),
@@ -290,7 +194,6 @@ def build_plans(queries, config):
         save_json(output, ordered_records(existing_by_index))
         print(
             f"planned {row['source_index']} "
-            f"| reasoning_chars={len(record.get('planning_reasoning') or '')} "
             f"| subtasks={len(record.get('plan') or [])} "
             f"| error={record['error']}",
             flush=True,
@@ -315,7 +218,7 @@ def expand_plans(plans, agents):
                         "dep": step.get("dep", []),
                         "subtask_id": step.get("id"),
                         "planner_agent": step.get("agent"),
-                        "planner_reason": step.get("reason"),
+                        "planner_rationale": step.get("rationale"),
                         "source": plan_record.get("source"),
                         "source_index": plan_record.get("source_index"),
                         "answer": plan_record.get("answer"),
@@ -326,7 +229,7 @@ def expand_plans(plans, agents):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build HuskyQA plans with long visible reasoning and JSON subtasks."
+        description="Build HuskyQA plans as direct JSON subtask arrays."
     )
     parser.add_argument("--input", default=CONFIG["input"])
     parser.add_argument("--plans-output", default=CONFIG["plans_output"])

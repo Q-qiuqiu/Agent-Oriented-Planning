@@ -11,7 +11,7 @@ from prompt import planner_prompt
 
 
 AGENTS = ["search_agent", "calculation_agent", "reasoning_agent"]
-PLANNER_PROMPT_VERSION = "huskyqa_v1"
+PLANNER_PROMPT_VERSION = "huskyqa_json_plan_rationale_2to3_sentences_v4"
 
 
 def planner_prompt_for_model(model):
@@ -106,11 +106,18 @@ def normalize_plan(plan):
         if not isinstance(task, str) or not task.strip():
             raise ValueError(f"Plan step {index} has no non-empty task")
         item["task"] = task.strip()
-        reason = item.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError(f"Plan step {index} has no non-empty reason")
-        item["reason"] = reason.strip()
-        prepared.append(item)
+        rationale = item.get("rationale") or item.get("reason")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ValueError(f"Plan step {index} has no non-empty rationale")
+        prepared.append(
+            {
+                "id": index,
+                "task": task.strip(),
+                "rationale": rationale.strip(),
+                "dep": item.get("dep"),
+                "agent": item["agent"],
+            }
+        )
 
     normalized = []
     for index, item in enumerate(prepared, start=1):
@@ -224,7 +231,7 @@ def expand_plans(plans, agents):
                         "dep": step.get("dep", []),
                         "subtask_id": step.get("id"),
                         "planner_agent": step.get("agent"),
-                        "planner_reason": step.get("reason"),
+                        "planner_rationale": step.get("rationale"),
                         "source": plan_record.get("source"),
                         "source_index": plan_record.get("source_index"),
                         "answer": plan_record.get("answer"),

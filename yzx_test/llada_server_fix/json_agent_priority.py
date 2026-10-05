@@ -1100,7 +1100,10 @@ class JsonAgentFieldController:
             max(cluster, key=lambda item: len(item[1]))
             for cluster in clustered
         ]
-        return selected[:self.tracking_slots]
+        # Natural-field discovery is not slot-limited. Controllers with a
+        # fixed slot list still ignore excess candidates in _assign_anchors;
+        # passive commit monitoring expands its slot list dynamically.
+        return selected
 
     def finalize(self, x: torch.Tensor) -> None:
         # Capture a field that materialized in the last generation block, where

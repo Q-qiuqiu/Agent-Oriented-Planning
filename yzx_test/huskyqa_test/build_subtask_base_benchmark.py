@@ -1,26 +1,15 @@
-import sys
-from pathlib import Path
+"""Generate HuskyQA plans with the base Llama model as direct JSON arrays."""
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-sys.path[:0] = [str(SCRIPT_DIR), str(SCRIPT_DIR.parent)]
+import argparse
 
-from base_llama3_builder import build_prefetch_reasoning_plan_prompt, run_builder
-from build_subtask_benchmark import (
-    AGENTS,
+from build_subtask_benchmark import AGENTS, print_agent_selection_summary
+from build_subtask_full_benchmark_v2 import (
+    build_plans,
     expand_plans,
     load_queries,
-    normalize_plan,
-    print_agent_selection_summary,
+    save_json,
 )
-# Use the v2 long-reasoning prompt (one ~2-sentence paragraph per agent plus a
-# synthesis paragraph) so the reasoning length matches the base_lladav1 /
-# base_llama3 v2 runs; only the PREFETCH_AGENTS prefix is added on top.
-from build_subtask_full_benchmark_v2 import FULL_PLANNER_PROMPT
 
-
-PROMPT_VERSION = "huskyqa_base_llama3_prefetch_reasoning_plan_v10_3sent"
-
-BASE_LLAMA3_PROMPT = build_prefetch_reasoning_plan_prompt(FULL_PLANNER_PROMPT)
 
 CONFIG = {
     "input": "benchmarks/huskyqa/huskyqa_raw.json",
@@ -33,20 +22,49 @@ CONFIG = {
     "planner_max_tokens": 1024,
     "timeout": 600,
     "limit": None,
-    "source": "agent-husky/HuskyQA",
-    "prompt_version": PROMPT_VERSION,
-    "planner_mode": "prefetch_reasoning_plan",
-    "planner_prompt": BASE_LLAMA3_PROMPT,
+    "agents": AGENTS,
 }
 
 
-if __name__ == "__main__":
-    run_builder(
-        config=CONFIG,
-        agents=AGENTS,
-        load_queries=load_queries,
-        normalize_plan=normalize_plan,
-        expand_plans=expand_plans,
-        print_summary=print_agent_selection_summary,
-        description="Build HuskyQA base_llama3 agent-names-first plans.",
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build base-Llama3 HuskyQA plans as direct JSON arrays."
     )
+    parser.add_argument("--input", default=CONFIG["input"])
+    parser.add_argument("--plans-output", default=CONFIG["plans_output"])
+    parser.add_argument("--benchmark-output", default=CONFIG["benchmark_output"])
+    parser.add_argument("--planner-api-url", default=CONFIG["planner_api_url"])
+    parser.add_argument("--planner-api-key", default=CONFIG["planner_api_key"])
+    parser.add_argument("--planner-model", default=CONFIG["planner_model"])
+    parser.add_argument(
+        "--planner-temperature", type=float, default=CONFIG["planner_temperature"]
+    )
+    parser.add_argument(
+        "--planner-max-tokens", type=int, default=CONFIG["planner_max_tokens"]
+    )
+    parser.add_argument("--timeout", type=int, default=CONFIG["timeout"])
+    parser.add_argument("--limit", type=int, default=CONFIG["limit"])
+    parser.add_argument("--agents", nargs="+", default=CONFIG["agents"], choices=AGENTS)
+    args = parser.parse_args()
+
+    config = dict(CONFIG)
+    config.update(vars(args))
+    if not config["planner_api_url"]:
+        raise ValueError("Missing planner API URL")
+    if config["planner_max_tokens"] < 1:
+        raise ValueError("planner_max_tokens must be at least 1")
+
+    plans = build_plans(load_queries(config["input"]), config)
+    save_json(config["plans_output"], plans)
+    benchmark = expand_plans(plans, config["agents"])
+    save_json(config["benchmark_output"], benchmark)
+    print(f"Saved plans: {config['plans_output']} ({len(plans)} queries)")
+    print(
+        f"Saved benchmark: {config['benchmark_output']} "
+        f"({len(benchmark)} rows)"
+    )
+    print_agent_selection_summary(plans)
+
+
+if __name__ == "__main__":
+    main()

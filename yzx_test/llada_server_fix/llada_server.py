@@ -28,6 +28,13 @@ from dual_late_decide_observer import DualVanillaLateDecideObserver
 from fixed_canvas import NaturalReasoningPlanMonitor
 from json_agent_priority import extract_agent_registry
 from model.modeling_llada import LLaDAModelLM
+from oracle_latent_observer import OracleLatentAgentObserver
+from online_latent_anchor_observer import OnlineLatentAnchorObserver
+from refined_online_latent_anchor_observer import (
+    RefinedOnlineLatentAnchorObserver,
+)
+from region_latent_agent_observer import RegionLatentAgentObserver
+from hypothesis_region_observer import HypothesisRegionObserver
 from planner_json_repair import repair_plan_json_response
 from response_agent_timing import infer_benchmark
 
@@ -109,14 +116,28 @@ class ServerConfig:
     reasoning_ratio: float
     plan_ratio: float
     method: str
-    fusion_global_stable: int
-    fusion_global_probability: float
-    fusion_global_margin: float
-    fusion_local_stable: int
-    fusion_local_probability: float
-    fusion_local_margin: float
     local_observation_stride: int
     all_local_probability: float
+    oracle_score_chunk_size: int
+    online_anchor_position_tolerance: int
+    online_anchor_stable_observations: int
+    online_refinement_radius: int
+    online_refinement_anchor_weight: float
+    online_refinement_agent_weight: float
+    online_max_track_misses: int
+    online_max_track_match_distance: int
+    online_track_stable_observations: int
+    online_track_score_weight: float
+    online_region_radius: int
+    online_region_top_k: int
+    online_region_temperature: float
+    online_region_main_aggregation: str
+    hypothesis_merge_distance: int
+    hypothesis_merge_gap: int
+    hypothesis_min_seen: int
+    hypothesis_min_support: float
+    hypothesis_max_center_jump: int
+    hypothesis_duplicate_observations: int
 
 
 class LLaDAPlannerRuntime:
@@ -321,19 +342,10 @@ class LLaDAPlannerRuntime:
             controller = DualVanillaLateDecideObserver(
                 tokenizer=self.tokenizer,
                 catalog=request_agent_names,
-                priority_slots=3,
-                tracking_slots=max(16, self.config.agent_timing_slots),
                 prompt_length=input_ids.shape[1],
                 gen_length=gen_length,
                 mask_id=mask_id,
                 anchor_min_logit_margin=self.config.agent_anchor_margin,
-                benchmark=infer_benchmark(request_agent_names),
-                fusion_global_stable=self.config.fusion_global_stable,
-                fusion_global_probability=self.config.fusion_global_probability,
-                fusion_global_margin=self.config.fusion_global_margin,
-                fusion_local_stable=self.config.fusion_local_stable,
-                fusion_local_probability=self.config.fusion_local_probability,
-                fusion_local_margin=self.config.fusion_local_margin,
             )
         elif self.config.method == "base":
             # Passive materialization timing only.  It never writes a catalog
@@ -341,11 +353,149 @@ class LLaDAPlannerRuntime:
             controller = NaturalReasoningPlanMonitor(
                 tokenizer=self.tokenizer,
                 catalog=request_agent_names,
-                priority_slots=self.config.agent_slots,
-                tracking_slots=max(16, self.config.agent_timing_slots),
                 prompt_length=input_ids.shape[1],
                 gen_length=gen_length,
                 mask_id=mask_id,
+            )
+        elif self.config.method == "oracle_latent":
+            # Diagnostic-only upper bound. It compresses existing full-sequence
+            # warmup logits for offline oracle-span replay and never participates
+            # in commit, token transfer, decoder masking, or prefetch.
+            controller = OracleLatentAgentObserver(
+                tokenizer=self.tokenizer,
+                catalog=request_agent_names,
+                prompt_length=input_ids.shape[1],
+                gen_length=gen_length,
+                mask_id=mask_id,
+                score_chunk_size=self.config.oracle_score_chunk_size,
+            )
+        elif self.config.method == "online_latent_diagnostic":
+            # Read-only online anchor localization plus oracle-span control.
+            # Both paths reuse the same existing full-sequence logits.
+            controller = OnlineLatentAnchorObserver(
+                tokenizer=self.tokenizer,
+                catalog=request_agent_names,
+                prompt_length=input_ids.shape[1],
+                gen_length=gen_length,
+                mask_id=mask_id,
+                score_chunk_size=self.config.oracle_score_chunk_size,
+                anchor_min_logit_margin=self.config.agent_anchor_margin,
+                anchor_position_tolerance=(
+                    self.config.online_anchor_position_tolerance
+                ),
+                anchor_stable_observations=(
+                    self.config.online_anchor_stable_observations
+                ),
+            )
+        elif self.config.method in {
+            "online_latent_refine", "online_latent_refine_tracking"
+        }:
+            controller = RefinedOnlineLatentAnchorObserver(
+                tokenizer=self.tokenizer,
+                catalog=request_agent_names,
+                prompt_length=input_ids.shape[1],
+                gen_length=gen_length,
+                mask_id=mask_id,
+                persistent_tracking=(
+                    self.config.method == "online_latent_refine_tracking"
+                ),
+                score_chunk_size=self.config.oracle_score_chunk_size,
+                anchor_min_logit_margin=self.config.agent_anchor_margin,
+                refinement_radius=self.config.online_refinement_radius,
+                refinement_anchor_weight=(
+                    self.config.online_refinement_anchor_weight
+                ),
+                refinement_agent_weight=(
+                    self.config.online_refinement_agent_weight
+                ),
+                anchor_position_tolerance=(
+                    self.config.online_anchor_position_tolerance
+                ),
+                anchor_stable_observations=(
+                    self.config.online_anchor_stable_observations
+                ),
+                max_track_misses=self.config.online_max_track_misses,
+                max_track_match_distance=(
+                    self.config.online_max_track_match_distance
+                ),
+                track_stable_observations=(
+                    self.config.online_track_stable_observations
+                ),
+                track_score_weight=self.config.online_track_score_weight,
+            )
+        elif self.config.method == "online_latent_region":
+            # Read-only persistent-track region scoring. Exact Agent value
+            # alignment is metadata only and never gates decoding or prefetch.
+            controller = RegionLatentAgentObserver(
+                tokenizer=self.tokenizer,
+                catalog=request_agent_names,
+                prompt_length=input_ids.shape[1],
+                gen_length=gen_length,
+                mask_id=mask_id,
+                score_chunk_size=self.config.oracle_score_chunk_size,
+                anchor_min_logit_margin=self.config.agent_anchor_margin,
+                region_radius=self.config.online_region_radius,
+                region_top_k=self.config.online_region_top_k,
+                region_temperature=self.config.online_region_temperature,
+                main_aggregation=(
+                    self.config.online_region_main_aggregation
+                ),
+                anchor_position_tolerance=(
+                    self.config.online_anchor_position_tolerance
+                ),
+                anchor_stable_observations=(
+                    self.config.online_anchor_stable_observations
+                ),
+                max_track_misses=self.config.online_max_track_misses,
+                max_track_match_distance=(
+                    self.config.online_max_track_match_distance
+                ),
+                track_stable_observations=(
+                    self.config.online_track_stable_observations
+                ),
+                track_score_weight=self.config.online_track_score_weight,
+            )
+        elif self.config.method == "online_latent_hypothesis":
+            controller = HypothesisRegionObserver(
+                tokenizer=self.tokenizer,
+                catalog=request_agent_names,
+                prompt_length=input_ids.shape[1],
+                gen_length=gen_length,
+                mask_id=mask_id,
+                score_chunk_size=self.config.oracle_score_chunk_size,
+                anchor_min_logit_margin=self.config.agent_anchor_margin,
+                region_radius=self.config.online_region_radius,
+                region_top_k=self.config.online_region_top_k,
+                region_temperature=self.config.online_region_temperature,
+                main_aggregation=(
+                    self.config.online_region_main_aggregation
+                ),
+                anchor_position_tolerance=(
+                    self.config.online_anchor_position_tolerance
+                ),
+                anchor_stable_observations=(
+                    self.config.online_anchor_stable_observations
+                ),
+                max_track_misses=self.config.online_max_track_misses,
+                max_track_match_distance=(
+                    self.config.online_max_track_match_distance
+                ),
+                track_stable_observations=(
+                    self.config.online_track_stable_observations
+                ),
+                track_score_weight=self.config.online_track_score_weight,
+                hypothesis_merge_distance=(
+                    self.config.hypothesis_merge_distance
+                ),
+                hypothesis_merge_gap=self.config.hypothesis_merge_gap,
+                hypothesis_min_seen=self.config.hypothesis_min_seen,
+                hypothesis_min_support=self.config.hypothesis_min_support,
+                hypothesis_max_center_jump=(
+                    self.config.hypothesis_max_center_jump
+                ),
+                hypothesis_duplicate_observations=(
+                    self.config.hypothesis_duplicate_observations
+                ),
             )
 
         generation_kwargs = {
@@ -360,7 +510,12 @@ class LLaDAPlannerRuntime:
             "mask_id": mask_id,
             "agent_controller": controller,
         }
-        uses_dual_vanilla = self.config.method in {"base", "commit"}
+        uses_dual_vanilla = self.config.method in {
+            "base", "commit", "oracle_latent", "online_latent_diagnostic",
+            "online_latent_refine", "online_latent_refine_tracking",
+            "online_latent_region",
+            "online_latent_hypothesis",
+        }
         if (
             uses_dual_vanilla
             and controller is not None
@@ -458,6 +613,18 @@ class LLaDAPlannerRuntime:
             metrics["probe_nfe"] = probe_forwards
             metrics["total_nfe"] = int(nfe) + probe_forwards
             metrics["probe_wall_time"] = probe_wall_time
+            diagnostic_overhead = float(
+                metrics["agent_priority"].get(
+                    "diagnostic_observer_overhead_seconds", 0.0
+                ) or 0.0
+            )
+            if diagnostic_overhead:
+                metrics["diagnostic_observer_overhead_seconds"] = (
+                    diagnostic_overhead
+                )
+                metrics["generation_seconds_excluding_diagnostic"] = max(
+                    0.0, generation_seconds - diagnostic_overhead
+                )
         return content, usage, metrics
 
 
@@ -646,13 +813,28 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Serve LLaDA with an OpenAI API.")
     parser.add_argument(
         "--method",
-        choices=("base", "commit", "plan", "all"),
+        choices=(
+            "base", "commit", "plan", "all", "oracle_latent",
+            "online_latent_diagnostic",
+            "online_latent_refine", "online_latent_refine_tracking",
+            "online_latent_region",
+            "online_latent_hypothesis",
+        ),
         default="base",
         help=(
             "base=Dual Vanilla with natural Agent timing only; "
-            "commit=Dual Vanilla with read-only Global/Local/Natural fusion; "
+            "commit=Dual Vanilla with Semantic/Prefix/Natural per-step commit; "
             "plan=Fixed Canvas PLAN-first with natural timing only; "
-            "all=PLAN-first plus read-only PLAN-region prediction."
+            "all=PLAN-first plus read-only PLAN-region prediction; "
+            "oracle_latent=diagnostic-only oracle-span replay of existing "
+            "full-sequence logits; online_latent_diagnostic=read-only online "
+            "latent anchor localization compared against oracle spans; "
+            "online_latent_refine adds +/-4 template refinement; "
+            "online_latent_refine_tracking also adds persistent monotonic "
+            "slot tracks; online_latent_region scores Agent identity across "
+            "each persistent track's local region."
+            " online_latent_hypothesis merges and validates noisy tracks "
+            "before applying the same region scorer."
         ),
     )
     parser.add_argument("--model_path", default="/data/labshare/Param/llada")
@@ -699,8 +881,8 @@ def parse_args():
         type=int,
         default=3,
         help=(
-            "Maximum normal-response Agent fields to time. Only agent_slots "
-            "fields participate in priority decoding or prefetch."
+            "Maximum normal-response Agent fields to time for plan/all. Base "
+            "and commit discover every PLAN Agent field dynamically."
         ),
     )
     parser.add_argument(
@@ -731,12 +913,6 @@ def parse_args():
             "is inferred from the request Agent registry."
         ),
     )
-    parser.add_argument("--fusion-global-stable", type=int, default=2)
-    parser.add_argument("--fusion-global-prob", type=float, default=0.90)
-    parser.add_argument("--fusion-global-margin", type=float, default=0.40)
-    parser.add_argument("--fusion-local-stable", type=int, default=2)
-    parser.add_argument("--fusion-local-prob", type=float, default=0.75)
-    parser.add_argument("--fusion-local-margin", type=float, default=0.15)
     parser.add_argument(
         "--local-observation-stride",
         type=int,
@@ -756,6 +932,136 @@ def parse_args():
             "used only by --method all. The margin remains 0.40 and stable "
             "count remains 2."
         ),
+    )
+    parser.add_argument(
+        "--oracle-score-chunk-size",
+        type=int,
+        default=32,
+        help=(
+            "Vocabulary logsumexp position chunk size used only by "
+            "--method oracle_latent. It changes diagnostic memory/overhead, "
+            "not model forwards or decoding."
+        ),
+    )
+    parser.add_argument(
+        "--online-anchor-position-tolerance",
+        type=int,
+        default=4,
+        help=(
+            "Maximum token-position drift counted as stable by the read-only "
+            "online latent anchor diagnostic."
+        ),
+    )
+    parser.add_argument(
+        "--online-anchor-stable-observations",
+        type=int,
+        default=2,
+        help=(
+            "Consecutive nearby anchor observations used only as a diagnostic "
+            "position-stability field; it never commits."
+        ),
+    )
+    parser.add_argument(
+        "--online-refinement-radius",
+        type=int,
+        default=4,
+        help="Local value-start search radius for refined anchor diagnostics.",
+    )
+    parser.add_argument(
+        "--online-refinement-anchor-weight",
+        type=float,
+        default=1.0,
+        help="Anchor structural-score weight in local joint scoring.",
+    )
+    parser.add_argument(
+        "--online-refinement-agent-weight",
+        type=float,
+        default=1.0,
+        help="Agent sequence-score weight in local joint scoring.",
+    )
+    parser.add_argument(
+        "--online-max-track-misses",
+        type=int,
+        default=3,
+        help="Observations a persistent diagnostic track may remain missing.",
+    )
+    parser.add_argument(
+        "--online-max-track-match-distance",
+        type=int,
+        default=64,
+        help="Maximum token distance for persistent track reassociation.",
+    )
+    parser.add_argument(
+        "--online-track-stable-observations",
+        type=int,
+        default=2,
+        help="Consecutive matches needed to label a diagnostic track stable.",
+    )
+    parser.add_argument(
+        "--online-track-score-weight",
+        type=float,
+        default=0.05,
+        help="Joint-score tie-break weight in monotonic track matching.",
+    )
+    parser.add_argument(
+        "--online-region-radius",
+        type=int,
+        default=4,
+        help="Token radius around each persistent track for region scoring.",
+    )
+    parser.add_argument(
+        "--online-region-top-k",
+        type=int,
+        default=2,
+        help="Number of best alignments averaged by top-k region scoring.",
+    )
+    parser.add_argument(
+        "--online-region-temperature",
+        type=float,
+        default=1.0,
+        help="Temperature for soft position aggregation in region scoring.",
+    )
+    parser.add_argument(
+        "--online-region-main-aggregation",
+        choices=("max", "top2_mean", "soft"),
+        default="top2_mean",
+        help="Primary region aggregation used by summary/timeline fields.",
+    )
+    parser.add_argument(
+        "--hypothesis-merge-distance",
+        type=int,
+        default=6,
+        help="Maximum median-position distance for merging raw tracks.",
+    )
+    parser.add_argument(
+        "--hypothesis-merge-gap",
+        type=int,
+        default=2,
+        help="Missing observations allowed when joining adjacent raw tracks.",
+    )
+    parser.add_argument(
+        "--hypothesis-min-seen",
+        type=int,
+        default=2,
+        help="Minimum observations required to validate a hypothesis.",
+    )
+    parser.add_argument(
+        "--hypothesis-min-support",
+        type=float,
+        default=0.5,
+        help="Minimum seen/span ratio required to validate a hypothesis.",
+    )
+    parser.add_argument(
+        "--hypothesis-max-center-jump",
+        type=int,
+        default=12,
+        help="Center jump above which a hypothesis is marked unstable.",
+    )
+    parser.add_argument(
+        "--hypothesis-duplicate-observations",
+        type=int,
+        default=2,
+        help="Nearby overlapping observations required for suppression.",
     )
     parser.add_argument(
         "--plan_json_repair",
@@ -778,23 +1084,55 @@ def main():
         "fixed_canvas_plan_first"
         if args.method in {"plan", "all"} else "dual_vanilla"
     )
-    if args.fusion_global_stable < 1 or args.fusion_local_stable < 1:
-        raise ValueError("Fusion stability counts must be positive.")
     if args.local_observation_stride < 1:
         raise ValueError("--local-observation-stride must be at least 1.")
     if not 0.0 <= args.all_local_prob <= 1.0:
         raise ValueError("--all-local-prob must be within [0,1].")
-    for name in (
-        "fusion_global_prob", "fusion_global_margin",
-        "fusion_local_prob", "fusion_local_margin",
+    if args.oracle_score_chunk_size < 1:
+        raise ValueError("--oracle-score-chunk-size must be at least 1.")
+    if args.online_anchor_position_tolerance < 0:
+        raise ValueError("--online-anchor-position-tolerance cannot be negative.")
+    if args.online_anchor_stable_observations < 1:
+        raise ValueError("--online-anchor-stable-observations must be at least 1.")
+    if args.online_refinement_radius < 0:
+        raise ValueError("--online-refinement-radius cannot be negative.")
+    if (
+        args.online_refinement_anchor_weight < 0
+        or args.online_refinement_agent_weight < 0
+        or args.online_refinement_anchor_weight
+        + args.online_refinement_agent_weight == 0
     ):
-        value = getattr(args, name)
-        if not 0.0 <= value <= 1.0:
-            raise ValueError(f"--{name.replace('_', '-')} must be within [0,1].")
+        raise ValueError("online refinement weights must be non-negative and non-zero.")
+    if args.online_max_track_misses < 0:
+        raise ValueError("--online-max-track-misses cannot be negative.")
+    if args.online_max_track_match_distance < 1:
+        raise ValueError("--online-max-track-match-distance must be positive.")
+    if args.online_track_stable_observations < 1:
+        raise ValueError("--online-track-stable-observations must be positive.")
+    if args.online_region_radius < 0:
+        raise ValueError("--online-region-radius cannot be negative.")
+    if args.online_region_top_k < 1:
+        raise ValueError("--online-region-top-k must be positive.")
+    if args.online_region_temperature <= 0:
+        raise ValueError("--online-region-temperature must be positive.")
+    if args.hypothesis_merge_distance < 0:
+        raise ValueError("--hypothesis-merge-distance cannot be negative.")
+    if args.hypothesis_merge_gap < 0:
+        raise ValueError("--hypothesis-merge-gap cannot be negative.")
+    if args.hypothesis_min_seen < 1:
+        raise ValueError("--hypothesis-min-seen must be positive.")
+    if not 0.0 <= args.hypothesis_min_support <= 1.0:
+        raise ValueError("--hypothesis-min-support must be within [0,1].")
+    if args.hypothesis_max_center_jump < 1:
+        raise ValueError("--hypothesis-max-center-jump must be positive.")
+    if args.hypothesis_duplicate_observations < 1:
+        raise ValueError(
+            "--hypothesis-duplicate-observations must be positive."
+        )
     agent_names = [name.strip() for name in args.agent_names.split(",") if name.strip()]
     if args.max_gen_length % args.block_size != 0:
         raise ValueError("max_gen_length must be divisible by block_size.")
-    if args.agent_timing_slots < args.agent_slots:
+    if args.method in {"plan", "all"} and args.agent_timing_slots < args.agent_slots:
         raise ValueError("agent_timing_slots must be at least agent_slots.")
     if args.reasoning_budget is not None and args.reasoning_budget <= 0:
         raise ValueError("reasoning_budget must be positive when provided.")
@@ -828,14 +1166,44 @@ def main():
             reasoning_ratio=args.reasoning_ratio,
             plan_ratio=args.plan_ratio,
             method=args.method,
-            fusion_global_stable=args.fusion_global_stable,
-            fusion_global_probability=args.fusion_global_prob,
-            fusion_global_margin=args.fusion_global_margin,
-            fusion_local_stable=args.fusion_local_stable,
-            fusion_local_probability=args.fusion_local_prob,
-            fusion_local_margin=args.fusion_local_margin,
             local_observation_stride=args.local_observation_stride,
             all_local_probability=args.all_local_prob,
+            oracle_score_chunk_size=args.oracle_score_chunk_size,
+            online_anchor_position_tolerance=(
+                args.online_anchor_position_tolerance
+            ),
+            online_anchor_stable_observations=(
+                args.online_anchor_stable_observations
+            ),
+            online_refinement_radius=args.online_refinement_radius,
+            online_refinement_anchor_weight=(
+                args.online_refinement_anchor_weight
+            ),
+            online_refinement_agent_weight=(
+                args.online_refinement_agent_weight
+            ),
+            online_max_track_misses=args.online_max_track_misses,
+            online_max_track_match_distance=(
+                args.online_max_track_match_distance
+            ),
+            online_track_stable_observations=(
+                args.online_track_stable_observations
+            ),
+            online_track_score_weight=args.online_track_score_weight,
+            online_region_radius=args.online_region_radius,
+            online_region_top_k=args.online_region_top_k,
+            online_region_temperature=args.online_region_temperature,
+            online_region_main_aggregation=(
+                args.online_region_main_aggregation
+            ),
+            hypothesis_merge_distance=args.hypothesis_merge_distance,
+            hypothesis_merge_gap=args.hypothesis_merge_gap,
+            hypothesis_min_seen=args.hypothesis_min_seen,
+            hypothesis_min_support=args.hypothesis_min_support,
+            hypothesis_max_center_jump=args.hypothesis_max_center_jump,
+            hypothesis_duplicate_observations=(
+                args.hypothesis_duplicate_observations
+            ),
         )
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)

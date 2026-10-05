@@ -41,7 +41,7 @@ python3 huskyqa_test/build_subtask_benchmark.py
 Evaluate plan completeness and non-redundancy:
 
 ```bash
-python3 huskyqa_test/evaluate.py
+python3 huskyqa_test/plan_evaluate.py
 ```
 
 Generate role-fit responses and judge the saved responses:
@@ -65,7 +65,10 @@ python3 huskyqa_test/summary_evaluate.py
 python3 huskyqa_test/summary_score.py
 ```
 
-Use `build_subtask_full_benchmark.py` only when planner reasoning plus the JSON
-plan is needed. `benchmark_planner_latency.py` measures one query with that
-verbose response format. `plan_evaluate.py` is a compatibility entry point for
-`evaluate.py`.
+All HuskyQA planner entry points now request a bare JSON plan array with
+`id`, `task`, `rationale`, `dep`, and `agent` fields. The rationale describes
+the information or capability required by its subtask. The historical
+`build_subtask_full_benchmark.py` and `_v2.py` filenames are retained for
+experiment-script compatibility, but they no longer request a separate
+reasoning section. `benchmark_planner_latency.py` measures the same direct-JSON
+format. `plan_evaluate.py` is the plan evaluation entry point.

@@ -698,92 +698,56 @@ class FixedCanvasMonitor(PassiveJsonAgentMonitor):
 
 
 class NaturalReasoningPlanMonitor(PassiveJsonAgentMonitor):
-    """Passive timing for the unchanged, non-fixed Dual Vanilla canvas."""
+    """Record only naturally materialized Agents on Dual Vanilla output."""
 
     def __init__(
         self, *, tokenizer, catalog, prompt_length, gen_length, mask_id,
-        priority_slots=3, tracking_slots=16,
     ):
         super().__init__(
             tokenizer=tokenizer,
             config=JsonAgentPriorityConfig(
                 catalog=list(catalog),
-                priority_slots=priority_slots,
-                tracking_slots=max(priority_slots, tracking_slots),
+                # The passive monitor expands this bootstrap slot list to all
+                # naturally materialized PLAN Agent fields.
+                priority_slots=1,
+                tracking_slots=1,
                 probe_period=0,
             ),
             prompt_length=prompt_length,
             gen_length=gen_length,
             mask_id=mask_id,
         )
-        self._reasoning_end_ids = tuple(self._encode("END_PLANNING_REASONING"))
-        self.reasoning_end_seconds = None
-        self.plan_json_start_seconds = None
-        self.plan_parseable_seconds = None
-        self.generation_complete_seconds = None
-        self.plan_effective_tokens = None
-
-    def _record_materialized(self, x, global_step):
-        super()._record_materialized(x, global_step)
-        now = self._elapsed()
-        if (
-            self.reasoning_end_seconds is None
-            and self._materialized_pattern_starts(x, self._reasoning_end_ids)
-        ):
-            self.reasoning_end_seconds = now
-        if self.plan_json_start_seconds is None and self._plan_json_bounds(x) is not None:
-            self.plan_json_start_seconds = now
-        if self.plan_parseable_seconds is None:
-            bounds = self._plan_json_bounds(x)
-            if bounds is not None:
-                text = self.tokenizer.decode(
-                    x[0, bounds[0] : bounds[1]][
-                        x[0, bounds[0] : bounds[1]] != self.mask_id
-                    ].detach().cpu().tolist(),
-                    skip_special_tokens=True,
-                )
-                plan, _ = FixedCanvasMonitor._raw_json_array(text)
-                if plan is not None:
-                    self.plan_parseable_seconds = now
-
-    def finalize(self, x):
-        super().finalize(x)
-        self.generation_complete_seconds = self._elapsed()
-        bounds = self._plan_json_bounds(x)
-        if bounds is not None:
-            self.plan_effective_tokens = int(bounds[1] - bounds[0])
 
     def metrics(self):
-        result = super().metrics()
-        slots = [slot for slot in result.get("agent_slots", []) if slot.get("agent")]
-        materialized = [
-            slot.get("materialized_seconds") or slot.get("recognized_seconds")
-            for slot in slots
-        ]
-        first3 = materialized[: min(3, len(materialized))]
-        result.update(
-            {
-                "policy": "dual_vanilla",
-                "structure_mode": "dual_vanilla",
-                "timing_source": "passive_materialized_x",
-                "final_agent_sequence": [slot.get("agent") for slot in slots],
-                "first3_tuple": [slot.get("agent") for slot in slots[:3]],
-                "first_agent_seconds": materialized[0] if materialized else None,
-                "first3_agent_seconds": (
-                    max(first3) if first3 and all(value is not None for value in first3) else None
-                ),
-                "all_final_agent_seconds": (
-                    max(materialized)
-                    if materialized and all(value is not None for value in materialized)
-                    else None
-                ),
-                "reasoning_end_seconds": self.reasoning_end_seconds,
-                "plan_json_start_seconds": self.plan_json_start_seconds,
-                "plan_parseable_seconds": self.plan_parseable_seconds,
-                "plan_effective_tokens": self.plan_effective_tokens,
-                "plan_capacity": None,
-                "plan_capacity_overflow": False,
-                "generation_complete": self.generation_complete_seconds,
-            }
-        )
-        return result
+        slots = []
+        for index, runtime in enumerate(self.slots):
+            agent = (
+                runtime.materialized_candidate
+                or runtime.recognized_candidate
+                or runtime.candidate
+            )
+            seconds = runtime.materialized_seconds
+            step = runtime.materialized_step
+            if seconds is None:
+                seconds = runtime.recognized_seconds
+                step = runtime.recognized_step
+            if seconds is None:
+                seconds = runtime.confirmed_seconds
+                step = runtime.confirmed_step
+            if agent is None or seconds is None:
+                continue
+            slots.append({
+                "slot": index,
+                "agent": str(agent),
+                "materialized_candidate": str(agent),
+                "materialized_seconds": float(seconds),
+                "materialized_step": step,
+            })
+        return {
+            "policy": "base",
+            "structure_mode": "dual_vanilla",
+            "timing_source": "passive_natural_agent_only",
+            "read_only": True,
+            "agent_count": len(slots),
+            "agent_slots": slots,
+        }

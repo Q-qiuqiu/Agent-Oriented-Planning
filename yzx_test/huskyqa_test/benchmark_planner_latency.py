@@ -11,50 +11,7 @@ from openai_compat import auth_header, chat_completions_url
 from prompt import planner_prompt
 
 
-LATENCY_TEST_OUTPUT_BLOCK = """For this single-query latency measurement,
-produce exactly two sections in the following order. The first section must be
-detailed enough to make the response substantially longer than the normal
-planner output.
-
-PLANNING_REASONING
-Explain in detailed prose:
-1. which facts, entities, numbers, constraints, and dates must be preserved;
-2. which operations or external evidence are needed to answer the query;
-3. which subtasks can run independently in the first batch;
-4. which later subtasks depend on earlier results;
-5. why every selected agent role is appropriate; and
-6. why the plan is complete without unnecessary or duplicate work.
-
-Make this reasoning section roughly as detailed as the JSON plan. Do not put
-JSON, square brackets, braces, or Markdown code fences in this section.
-END_PLANNING_REASONING
-
-PLAN_JSON
-[
-  {
-    "agent": "search_agent",
-    "id": 1,
-    "task": "A detailed, self-contained, executable subtask that preserves all relevant entities, numbers, constraints, and expected output.",
-    "reason": "A detailed explanation of why this role is the best fit and how its output supports the final answer.",
-    "dep": []
-  }
-]
-END_PLAN_JSON
-
-The PLAN_JSON section must contain one valid JSON array using the original
-schema. Make every task and reason detailed and self-contained. Do not add
-comments, trailing commas, extra fields, or prose inside the JSON array.
-"""
-
-LATENCY_TEST_PLANNER_PROMPT = planner_prompt.replace(
-    "Output only one valid JSON array in this exact schema:",
-    "The PLAN_JSON array must use this exact schema:",
-    1,
-).replace(
-    "- Do not include analysis, markdown fences, comments, or text outside the array.",
-    LATENCY_TEST_OUTPUT_BLOCK,
-    1,
-)
+LATENCY_TEST_PLANNER_PROMPT = planner_prompt
 
 
 # Edit these values directly before running the script.
@@ -141,22 +98,6 @@ def extract_json_array(text):
     raise ValueError("Cannot find plan JSON in planner output")
 
 
-def extract_planning_reasoning(text):
-    start_marker = "PLANNING_REASONING"
-    end_marker = "END_PLANNING_REASONING"
-    start = text.find(start_marker)
-    if start < 0:
-        return None
-    start += len(start_marker)
-    end = text.find(end_marker, start)
-    if end < 0:
-        end = text.find("PLAN_JSON", start)
-    if end < 0:
-        return None
-    reasoning = text[start:end].strip(" \n:\t")
-    return reasoning or None
-
-
 def request_plan(query_record):
     headers = {"Content-Type": "application/json"}
     headers.update(auth_header(CONFIG["api_key"]))
@@ -218,7 +159,6 @@ def request_plan(query_record):
         "server_block_size": server_metrics.get("block_size"),
         "server_cache_mode": server_metrics.get("cache_mode"),
         "finish_reason": data["choices"][0].get("finish_reason"),
-        "planning_reasoning": extract_planning_reasoning(raw_output),
         "plan": plan,
         "raw_output": raw_output,
         "parse_error": parse_error,
@@ -299,7 +239,6 @@ def main():
             f"| effective_tps={format_metric(measurement['effective_tps'])} "
             f"| server_tps={format_metric(measurement['server_generation_tps'])} "
             f"| nfe={measurement['server_nfe']} "
-            f"| reasoning_chars={len(measurement['planning_reasoning'] or '')} "
             f"| steps={len(measurement['plan'] or [])} "
             f"| error={measurement['parse_error']}",
             flush=True,
@@ -307,7 +246,7 @@ def main():
 
     summary = timing_summary(measurements)
     result = {
-        "planner_mode": "latency_test_reasoning_then_json",
+        "planner_mode": "latency_test_direct_json",
         "api_url": chat_completions_url(CONFIG["api_url"]),
         "model": CONFIG["model"],
         "source_index": query_record["source_index"],

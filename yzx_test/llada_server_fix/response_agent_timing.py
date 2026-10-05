@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import Optional, Sequence
 
-from json_agent_priority import JsonAgentFieldController
+from json_agent_priority import JsonAgentFieldController, JsonAgentSlotRuntime
 
 
 BENCHMARK_AGENT_REGISTRIES = {
@@ -73,7 +72,12 @@ class PassiveJsonAgentMonitor(JsonAgentFieldController):
             if not any(left <= start < right for left, right in end_spans)
         ]
         if not start_candidates:
-            return None
+            # Direct-JSON planners emit the array without PLAN_JSON markers.
+            # Their entire generated response is the PLAN search region.
+            return (
+                self.prompt_length,
+                min(x.shape[1], self.prompt_length + self.gen_length),
+            )
 
         plan_start = start_candidates[0] + len(self._plan_start_ids)
         plan_end = next(
@@ -94,9 +98,13 @@ class PassiveJsonAgentMonitor(JsonAgentFieldController):
         ]
 
     def _record_materialized(self, x, global_step):
-        candidates = self._plan_agent_candidates(x)
-        self._assign_anchors(x, candidates)
+        # Capture the event timestamp before scanning, serialization or log I/O.
         now = self._elapsed()
+        candidates = self._plan_agent_candidates(x)
+        while len(self.slots) < len(candidates):
+            self.slots.append(JsonAgentSlotRuntime())
+        self.tracking_slots = len(self.slots)
+        self._assign_anchors(x, candidates)
         for slot_index, runtime in enumerate(self.slots):
             observed_name = self._observed_catalog_value(x, runtime)
             if observed_name is None:
@@ -107,19 +115,6 @@ class PassiveJsonAgentMonitor(JsonAgentFieldController):
             if runtime.recognized_seconds is None:
                 runtime.recognized_seconds = now
                 runtime.recognized_step = global_step
-                self.logger.info(
-                    "base_agent_observed %s",
-                    json.dumps(
-                        {
-                            "slot": slot_index,
-                            "agent": observed_name,
-                            "seconds": now,
-                            "step": global_step,
-                            "fuzzy_matched_from": runtime.fuzzy_matched_from,
-                        },
-                        sort_keys=True,
-                    ),
-                )
             if runtime.confirmed_seconds is None:
                 runtime.confirmed_seconds = now
                 runtime.confirmed_step = global_step
